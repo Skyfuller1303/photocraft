@@ -25,3 +25,5 @@ All after captures above were regenerated and visually inspected on the merged s
 Build the native `snapshot` example at the source revision above. Fixtures contain control-protocol steps and synthetic data only. Use an isolated `PHOTOCRAFT_CONFIG_DIR` and run the example with `--size 1280x1200 --scale 1 --script` containing the JSON from the selected file in `fixtures/`. Use `--scale 2` for `icon-setting-hidpi.json`; control coordinates remain screen points. The before image comes from the parent binary.
 
 This is a separate orphan asset branch. No screenshot binaries or local plan/log files are part of the source PR.
+
+[Final source validation and CI limits](VALIDATION.md).
