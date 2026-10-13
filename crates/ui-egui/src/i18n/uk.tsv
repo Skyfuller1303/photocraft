@@ -196,6 +196,11 @@
 	New Adjustment Layer	Новий коригувальний шар
 	New Fill Layer	Новий шар заливки
 	Layer Mask	Маска шару
+	Copy Mask	Копіювати маску
+	Paste Mask	Вставити маску
+	Replace Layer Mask?	Замінити маску шару?
+	Replace the existing pixel mask on “{layer}”?	Замінити наявну піксельну маску шару «{layer}»?
+	Replace	Замінити
 	Add Layer Mask	Додати маску шару
 	Delete Layer Mask	Видалити маску шару
 	Enable Layer Mask	Увімкнути маску шару

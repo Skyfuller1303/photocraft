@@ -705,6 +705,13 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if id == "ui.symmetryTransform" {
         return crate::symmetry_ui::can_transform(app);
     }
+    if id == photocraft_engine::mask_transfer_cmds::COPY {
+        return app.session.active().and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id))).is_some_and(|l| l.mask.is_some());
+    }
+    if id == photocraft_engine::mask_transfer_cmds::PASTE {
+        return app.session.mask_clipboard.is_some()
+            && app.session.active().is_some_and(|st| st.active_layer.is_some_and(|id| st.doc.layer(id).is_some() && !st.doc.effective_locks(id).all));
+    }
     // Draft Pen points can be undone even when the document has no History entries.
     if id == "edit.undo" && app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
         return true;

@@ -69,6 +69,7 @@ pub mod layer_style;
 pub mod lens_cmds;
 pub mod link_watch;
 pub mod magnetic_cmds;
+pub mod mask_transfer_cmds;
 pub mod mask_view_cmds;
 mod migrate_cmds;
 pub mod mode_cmds;
@@ -379,6 +380,8 @@ pub struct Session {
     coalesce_request: Option<String>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
     pub clipboard: Option<edit_cmds::Clip>,
+    /// Copy Mask / Paste Mask: full editable pixel mask, shared by document tabs (#2928).
+    pub mask_clipboard: Option<mask_transfer_cmds::MaskClip>,
     /// Layer › Layer Style › Copy Layer Style: effects, blend mode, fill opacity and the Advanced
     /// Blending switches.
     pub style_clipboard: Option<(photocraft_doc::Effects, photocraft_color::BlendMode, f32, photocraft_doc::AdvancedBlending)>,

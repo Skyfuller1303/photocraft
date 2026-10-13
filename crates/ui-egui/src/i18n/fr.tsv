@@ -348,6 +348,11 @@
 	Gradient…	Dégradé…
 	Pattern…	Motif…
 	Layer Mask	Masque de calque
+	Copy Mask	Copier le masque
+	Paste Mask	Coller le masque
+	Replace Layer Mask?	Remplacer le masque de calque ?
+	Replace the existing pixel mask on “{layer}”?	Remplacer le masque de pixels existant sur « {layer} » ?
+	Replace	Remplacer
 	Vector Mask	Masque vectoriel
 	Reveal Selection	Afficher la sélection
 	Hide Selection	Masquer la sélection

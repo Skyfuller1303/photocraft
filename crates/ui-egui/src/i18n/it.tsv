@@ -351,6 +351,10 @@
 	Gradient…	Sfumatura…
 	Pattern…	Pattern…
 	Layer Mask	Maschera di livello
+	Copy Mask	Copia maschera
+	Paste Mask	Incolla maschera
+	Replace Layer Mask?	Sostituire la maschera di livello?
+	Replace the existing pixel mask on “{layer}”?	Sostituire la maschera pixel esistente su “{layer}”?
 	Vector Mask	Maschera vettoriale
 	Reveal Selection	Mostra selezione
 	Hide Selection	Nascondi selezione

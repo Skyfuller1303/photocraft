@@ -338,6 +338,10 @@
 	Gradient…	Gradijent…
 	Pattern…	Šara…
 	Layer Mask	Maska sloja
+	Copy Mask	Kopiraj masku
+	Paste Mask	Nalepi masku
+	Replace Layer Mask?	Zameniti masku sloja?
+	Replace the existing pixel mask on “{layer}”?	Zameniti postojeću pikselsku masku na sloju „{layer}“?
 	Vector Mask	Vektorska maska
 	Reveal Selection	Otkrij selekciju
 	Hide Selection	Sakrij selekciju

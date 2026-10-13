@@ -362,6 +362,11 @@
 	Gradient…	漸層…
 	Pattern…	圖樣…
 	Layer Mask	圖層遮色片
+	Copy Mask	複製遮色片
+	Paste Mask	貼上遮色片
+	Replace Layer Mask?	取代圖層遮色片？
+	Replace the existing pixel mask on “{layer}”?	取代「{layer}」上的現有像素遮色片？
+	Replace	取代
 	Vector Mask	向量遮色片
 	Reveal Selection	顯現選取範圍
 	Hide Selection	隱藏選取範圍

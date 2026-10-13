@@ -209,6 +209,11 @@
 	New Adjustment Layer	Новый корректирующий слой
 	New Fill Layer	Новый слой-заливка
 	Layer Mask	Маска слоя
+	Copy Mask	Копировать маску
+	Paste Mask	Вставить маску
+	Replace Layer Mask?	Заменить маску слоя?
+	Replace the existing pixel mask on “{layer}”?	Заменить существующую пиксельную маску слоя «{layer}»?
+	Replace	Заменить
 	Add Layer Mask	Добавить маску слоя
 	Delete Layer Mask	Удалить маску слоя
 	Enable Layer Mask	Включить маску слоя

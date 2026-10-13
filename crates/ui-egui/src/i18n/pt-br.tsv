@@ -343,6 +343,10 @@
 	Gradient…	Degradê…
 	Pattern…	Padrão…
 	Layer Mask	Máscara de camada
+	Copy Mask	Copiar máscara
+	Paste Mask	Colar máscara
+	Replace Layer Mask?	Substituir máscara de camada?
+	Replace the existing pixel mask on “{layer}”?	Substituir a máscara de pixels existente em “{layer}”?
 	Vector Mask	Máscara vetorial
 	Reveal Selection	Revelar seleção
 	Hide Selection	Ocultar seleção

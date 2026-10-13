@@ -357,6 +357,11 @@
 	Gradient…	渐变…
 	Pattern…	图案…
 	Layer Mask	图层蒙版
+	Copy Mask	复制蒙版
+	Paste Mask	粘贴蒙版
+	Replace Layer Mask?	替换图层蒙版？
+	Replace the existing pixel mask on “{layer}”?	替换“{layer}”上的现有像素蒙版？
+	Replace	替换
 	Vector Mask	矢量蒙版
 	Reveal Selection	显示选区
 	Hide Selection	隐藏选区

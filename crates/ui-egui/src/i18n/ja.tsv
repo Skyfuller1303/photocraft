@@ -352,6 +352,11 @@
 	Gradient…	グラデーション…
 	Pattern…	パターン…
 	Layer Mask	レイヤーマスク
+	Copy Mask	マスクをコピー
+	Paste Mask	マスクを貼り付け
+	Replace Layer Mask?	レイヤーマスクを置き換えますか？
+	Replace the existing pixel mask on “{layer}”?	「{layer}」の既存のピクセルマスクを置き換えますか？
+	Replace	置き換え
 	Vector Mask	ベクトルマスク
 	Reveal Selection	選択範囲を表示
 	Hide Selection	選択範囲を非表示

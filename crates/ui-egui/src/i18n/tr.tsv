@@ -334,6 +334,10 @@
 	Gradient…	Gradyan…
 	Pattern…	Desen…
 	Layer Mask	Katman Maskesi
+	Copy Mask	Maskeyi Kopyala
+	Paste Mask	Maskeyi Yapıştır
+	Replace Layer Mask?	Katman Maskesi Değiştirilsin mi?
+	Replace the existing pixel mask on “{layer}”?	“{layer}” üzerindeki mevcut piksel maskesi değiştirilsin mi?
 	Vector Mask	vektör maskesi
 	Reveal Selection	Seçimi Göster
 	Hide Selection	Seçimi Gizle

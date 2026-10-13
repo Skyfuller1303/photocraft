@@ -343,6 +343,10 @@
 	Gradient…	Verloop…
 	Pattern…	Patroon…
 	Layer Mask	Laagmasker
+	Copy Mask	Masker kopiëren
+	Paste Mask	Masker plakken
+	Replace Layer Mask?	Laagmasker vervangen?
+	Replace the existing pixel mask on “{layer}”?	Het bestaande pixelmasker op “{layer}” vervangen?
 	Vector Mask	Vectormasker
 	Reveal Selection	Selectie tonen
 	Hide Selection	Selectie verbergen

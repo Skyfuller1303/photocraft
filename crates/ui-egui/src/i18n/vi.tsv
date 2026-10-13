@@ -312,6 +312,11 @@
 	Layer Content Options…	Tùy chọn nội dung lớp…
 	Layer from Background…	Lớp từ nền…
 	Layer Mask	Mặt nạ lớp
+	Copy Mask	Sao chép mặt nạ
+	Paste Mask	Dán mặt nạ
+	Replace Layer Mask?	Thay thế mặt nạ lớp?
+	Replace the existing pixel mask on “{layer}”?	Thay thế mặt nạ điểm ảnh hiện có trên “{layer}”?
+	Replace	Thay thế
 	Layer Style	Kiểu lớp
 	Layer via Copy	Lớp bằng sao chép
 	Layer via Cut	Lớp bằng cắt

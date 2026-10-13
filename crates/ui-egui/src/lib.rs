@@ -227,6 +227,9 @@ pub mod workspace_ui;
 pub mod zoom_levels;
 pub mod zoom_tool;
 
+// Session-wide mask clipboard and transfer prompts.
+mod mask_transfer_ui;
+
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
 
@@ -665,6 +668,7 @@ pub struct PhotocraftApp {
     /// A raw file just opened interactively, waiting for the open-time Camera Raw dialog (shown
     /// on the next frame, which has the egui context).
     pub(crate) pending_raw_open: Option<camera_raw_ui::RawOpen>,
+    pub(crate) mask_transfer: Option<mask_transfer_ui::Prompt>,
     /// The open-time re-develop (or its Camera Raw step) running in the background.
     pub(crate) raw_redevelop: Option<camera_raw_ui::Redevelop>,
     /// Filter › Adaptive Wide Angle dialog (wide_angle_ui).
@@ -848,6 +852,7 @@ impl PhotocraftApp {
             gradient: Default::default(),
             camera_raw: None,
             pending_raw_open: None,
+            mask_transfer: None,
             raw_redevelop: None,
             wide_angle: None,
             dialog_edits: Default::default(),
@@ -979,6 +984,9 @@ impl PhotocraftApp {
         if let Some(result) = panel_docking::command(self, id, &params) {
             return result;
         }
+        if let Some(result) = mask_transfer_ui::intercept(self, id, &params) {
+            return result;
+        }
         if let Some(r) = transform_tool::intercept(self, id) {
             return r;
         }
@@ -1011,9 +1019,15 @@ impl PhotocraftApp {
             .session
             .active()
             .is_some_and(|st| st.active_layer.is_some_and(|layer| params.get("layer").and_then(Value::as_u64).is_none_or(|target| target == layer.0)));
-        let creates_active_mask =
-            matches!(id, "layer.layerMask.revealAll" | "layer.layerMask.hideAll" | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection")
-                && on_active_layer;
+        let creates_active_mask = matches!(
+            id,
+            "layer.layerMask.revealAll"
+                | "layer.layerMask.hideAll"
+                | "layer.layerMask.revealSelection"
+                | "layer.layerMask.hideSelection"
+                | photocraft_engine::mask_transfer_cmds::PASTE
+                | photocraft_engine::mask_transfer_cmds::TRANSFER
+        ) && on_active_layer;
         let creates_active_vector_mask = matches!(
             id,
             "layer.vectorMask.add" | "layer.vectorMask.fromPath" | "layer.vectorMask.revealAll" | "layer.vectorMask.hideAll" | "layer.vectorMask.currentPath"

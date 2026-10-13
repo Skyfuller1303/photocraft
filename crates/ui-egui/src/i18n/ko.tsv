@@ -339,6 +339,11 @@
 	Gradient…	그레이디언트…
 	Pattern…	패턴…
 	Layer Mask	레이어 마스크
+	Copy Mask	마스크 복사
+	Paste Mask	마스크 붙여넣기
+	Replace Layer Mask?	레이어 마스크를 교체하시겠습니까?
+	Replace the existing pixel mask on “{layer}”?	“{layer}”의 기존 픽셀 마스크를 교체하시겠습니까?
+	Replace	교체
 	Vector Mask	벡터 마스크
 	Reveal Selection	선택 영역 표시
 	Hide Selection	선택 영역 숨기기

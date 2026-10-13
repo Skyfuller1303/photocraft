@@ -3312,6 +3312,10 @@ cameraRaw	Yellow	Sárga
 	Layer Count	Rétegek száma
 	Layer From Background	Réteg a háttérből
 	Layer Mask	Rétegmaszk
+	Copy Mask	Maszk másolása
+	Paste Mask	Maszk beillesztése
+	Replace Layer Mask?	Rétegmaszk cseréje?
+	Replace the existing pixel mask on “{layer}”?	Lecseréli a(z) „{layer}” meglévő pixelmaszkját?
 	Layer Properties	Réteg tulajdonságai
 	Legacy compositing	Régi képösszeállítás
 	Length	Hossz

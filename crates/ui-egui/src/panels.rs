@@ -2264,6 +2264,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // An fx drag that never saw its release (the panel was hidden) must not outlive the button.
             if !ctx.input(|i| i.pointer.primary_down() || i.pointer.any_released()) {
                 ctx.data_mut(|d| d.remove::<FxDrag>(fx_drag_key()));
+                crate::mask_transfer_ui::clear_drag(&ctx);
                 ctx.data_mut(|d| d.remove::<MaskDrag>(mask_drag_key()));
                 ctx.data_mut(|d| d.remove::<crate::smart_ui::FilterDrag>(crate::smart_ui::drag_key()));
             }
@@ -2274,7 +2275,12 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             });
             let dragging = held && ctx.input(|i| i.pointer.primary_down());
             let pointer = ctx.input(|i| i.pointer.interact_pos());
-            let delta = layer_drag_edge_scroll(pointer, ui.clip_rect(), dragging, ctx.input(|i| i.stable_dt));
+            let delta = layer_drag_edge_scroll(
+                pointer,
+                ui.clip_rect(),
+                dragging || (crate::mask_transfer_ui::dragging(&ctx) && ctx.input(|i| i.pointer.primary_down())),
+                ctx.input(|i| i.stable_dt),
+            );
             if delta != 0.0 {
                 ui.scroll_with_delta(vec2(0.0, delta));
                 ctx.request_repaint();
@@ -2359,7 +2365,9 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let filter_footer_drag = ctx.data(|d| d.get_temp::<crate::smart_ui::FilterDrag>(crate::smart_ui::drag_key()));
     crate::smart_ui::drag_feedback(&ctx, &doc);
     let mask_footer_drag = ctx.data(|d| d.get_temp::<MaskDrag>(mask_drag_key()));
+    crate::mask_transfer_ui::drag_feedback(&ctx, &doc);
     if let Some((_, kind)) = mask_footer_drag
+        && !crate::mask_transfer_ui::dragging(&ctx)
         && let Some(p) = ctx.input(|i| i.pointer.interact_pos())
     {
         let label = if kind == MaskKind::Vector { tl!("Vector Mask") } else { tl!("Layer Mask") };
@@ -2369,6 +2377,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if ctx.input(|i| i.pointer.any_released()) {
         ctx.data_mut(|d| d.remove::<u64>(egui::Id::new("layer-drag")));
         ctx.data_mut(|d| d.remove::<FxDrag>(fx_drag_key()));
+        crate::mask_transfer_ui::clear_drag(&ctx);
         ctx.data_mut(|d| d.remove::<MaskDrag>(mask_drag_key()));
         ctx.data_mut(|d| d.remove::<crate::smart_ui::FilterDrag>(crate::smart_ui::drag_key()));
     }
@@ -2507,7 +2516,14 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             continue;
         }
-        let _ = app.run(&id, p);
+        if matches!(id.as_str(), photocraft_engine::mask_transfer_cmds::PASTE | photocraft_engine::mask_transfer_cmds::TRANSFER) {
+            if let Err(e) = crate::menus::invoke(app, &ctx, &id, p) {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+        } else {
+            let _ = app.run(&id, p);
+        }
     }
 }
 
@@ -2671,17 +2687,17 @@ fn layer_row(
     // Photoshop's default (medium) thumbnails: 32 pt rows.
     let row_h = if t.pro { 32.0 } else { 46.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
+    let mut deferred_layer_drag = None;
     // A drag from a mask's thumbnail drags that mask, not the layer (#3113, #3119).
     let mask_drag = starts_mask_drag(ctx, l, &resp);
     if let Some(kind) = mask_drag {
         ctx.data_mut(|d| d.insert_temp::<MaskDrag>(mask_drag_key(), (l.id.0, kind)));
     }
     let mask_drag = mask_drag.is_some();
-    layer_drag_and_drop(app, ctx, ui, l, rect, &resp, actions);
     fx_drop(ctx, ui, l, rect, actions);
     crate::smart_ui::drop_on_row(ctx, ui, l, rect, actions);
     if resp.drag_started() && !mask_drag {
-        crate::layer_transfer::begin_from_panel(app, ctx, l.id);
+        deferred_layer_drag = Some(l.id);
     }
     // Rows are painted: name them for screen readers and UI tests.
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &l.name));
@@ -2762,6 +2778,13 @@ fn layer_row(
     x += ts + 6.0;
     // Link chains and pixel / vector mask thumbnails (#153).
     let masks = crate::mask_thumbs_ui::paint(app, ctx, ui, &painter, doc, l, &mut x, rect.center().y, ts, actions);
+    crate::mask_transfer_ui::drag_row(ctx, ui, doc, l, &resp, rect, &masks, actions);
+    if !crate::mask_transfer_ui::dragging(ctx) {
+        layer_drag_and_drop(app, ctx, ui, l, rect, &resp, actions);
+        if let Some(layer) = deferred_layer_drag {
+            crate::layer_transfer::begin_from_panel(app, ctx, layer);
+        }
+    }
     let mask_rect = masks.thumb(crate::mask_thumbs_ui::MaskKind::Pixel);
     let vector_rect = masks.thumb(crate::mask_thumbs_ui::MaskKind::Vector);
     // Photoshop frames the targeted thumbnail (pixels, mask or vector mask) of the active layer
@@ -2930,6 +2953,7 @@ fn layer_row(
             }
             // Right-clicking inside a multi-selection keeps it and acts on every selected layer.
             let on_set = row.multi && selected;
+            crate::mask_transfer_ui::context_menu(app, ui, l, on_set, actions);
             if crate::layer_menu_ui::show(app, ui, l, on_set, actions)
                 && let Some(done) = crate::layer_row_ui::start_rename(ui.ctx(), l.id.0, &l.name)
             {

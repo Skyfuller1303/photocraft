@@ -357,6 +357,11 @@
 	Gradient…	Verlauf…
 	Pattern…	Muster…
 	Layer Mask	Ebenenmaske
+	Copy Mask	Maske kopieren
+	Paste Mask	Maske einfügen
+	Replace Layer Mask?	Ebenenmaske ersetzen?
+	Replace the existing pixel mask on “{layer}”?	Vorhandene Pixelmaske auf „{layer}“ ersetzen?
+	Replace	Ersetzen
 	Vector Mask	Vektormaske
 	Reveal Selection	Auswahl anzeigen
 	Hide Selection	Auswahl ausblenden

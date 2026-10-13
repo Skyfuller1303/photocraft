@@ -192,6 +192,9 @@ what an agent can't finish alone.
   ([context-menu-parity.md](context-menu-parity.md)); Libraries, Comments, Contextual Task Bar
   panels.
 - **Estimate:** 150–250 h.
+- **2026-10-11 implemented:** pixel-mask Copy/Paste between tabs, Alt-drag copy / drag move,
+  and explicit replacement confirmation (#2928); [workflow and test evidence](mask-transfer.md).
+  This is separate from the whole-layer clipboard gap above; headline estimates are unchanged.
 
 ### G2. Interactive performance
 - **Measured progress (2026-10-10):** Tilt-Shift's existing per-level halo/copy
