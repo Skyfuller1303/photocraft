@@ -876,7 +876,48 @@ fn selection_after_edit(f: &Fill, p: &Value, previous: Option<Marker>) -> Option
     Some(if opacity { Marker::Opacity(at) } else { Marker::Color(at) })
 }
 
-fn stop_strip(ui: &mut egui::Ui, key: egui::Id, f: &Fill, midpoints: bool, pending: Option<&Value>, colors: ([f32; 4], [f32; 4])) -> Option<StopAction> {
+/// The shape paint popup exposes the selected upper handle's opacity without changing colour
+/// stops or multiplying the entire paint's alpha. No upper handle selected: disabled field.
+pub(crate) fn paint_stop_opacity(ui: &mut egui::Ui, key: egui::Id, fill: &Fill) -> Option<Value> {
+    let Fill::Gradient { opacity_stops, .. } = fill else { return None };
+    let selected = ui.data(|d| d.get_temp::<Marker>(key.with("selection")));
+    let mut stops = if opacity_stops.is_empty() { vec![(0.0, 1.0), (1.0, 1.0)] } else { opacity_stops.clone() };
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let selected = match selected {
+        Some(Marker::Opacity(index)) => stops.get(index).map(|(_, opacity)| (index, *opacity)),
+        _ => None,
+    };
+    let mut value = selected.map_or(100.0, |(_, opacity)| opacity * 100.0);
+    let changed = ui
+        .horizontal(|ui| {
+            ui.label(tl!("Opacity"));
+            ui.add_enabled_ui(selected.is_some(), |ui| {
+                let response = widgets::value_field(ui, &mut value, 0.0..=100.0, "%", 62.0);
+                response.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(value), tl!("Stop opacity")));
+                response.changed()
+            })
+            .inner
+        })
+        .inner;
+    selected.filter(|_| changed).map(|(index, _)| json!({"action": "opacity", "kind": "opacity", "index": index, "opacity": value}))
+}
+
+pub(crate) fn retain_stop_selection(ui: &egui::Ui, key: egui::Id, fill: &Fill, edit: &Value) {
+    let selection_key = key.with("selection");
+    let selected = ui.data(|d| d.get_temp::<Marker>(selection_key));
+    if let Some(marker) = selection_after_edit(fill, edit, selected) {
+        ui.data_mut(|d| d.insert_temp(selection_key, marker));
+    }
+}
+
+pub(crate) fn stop_strip(
+    ui: &mut egui::Ui,
+    key: egui::Id,
+    f: &Fill,
+    midpoints: bool,
+    pending: Option<&Value>,
+    colors: ([f32; 4], [f32; 4]),
+) -> Option<StopAction> {
     let Fill::Gradient { stops, .. } = f else { return None };
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width().max(120.0);

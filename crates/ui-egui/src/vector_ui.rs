@@ -11,7 +11,6 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
-use crate::shape_paint_ui::{PaintChange, swatch};
 use crate::state::{Tool, ToolOptions};
 use crate::theme::Tokens;
 
@@ -64,7 +63,8 @@ fn stroke_param(app: &PhotocraftApp) -> Value {
     }
     let mut p = o.shape_stroke.params();
     p["width"] = json!(o.stroke_width);
-    p["color"] = json!(app.session.tools.background);
+    let color = if is_shape_tool(app.ui.tool) { crate::shape_options::stroke_color(app) } else { app.session.tools.background };
+    p["color"] = json!(color);
     p
 }
 
@@ -111,8 +111,9 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
     if tool == Tool::CustomShape {
         // ⇧ keeps the shape's proportions (the rect is already squared).
         if let Ok(rect) = serde_json::from_value(p["rect"].take()) {
-            let (fill, stroke) = (fill_param(app), stroke_param(app));
-            crate::preset_panels::finish_custom_shape(app, rect, mods.shift, fill, stroke);
+            let mut paint = json!({});
+            add_paint(app, &mut paint);
+            crate::preset_panels::finish_custom_shape(app, rect, mods.shift, paint["fill"].take(), paint["stroke"].take());
         }
         return;
     }
@@ -129,12 +130,18 @@ fn fill_param(app: &PhotocraftApp) -> Value {
 /// Create a shape layer from `shape.create` geometry with the options bar's fill and stroke: the
 /// end of a drag, and the Create Rectangle / Ellipse / … dialogs (`shape_dialog`).
 pub fn create_shape(app: &mut PhotocraftApp, mut geometry: Value) -> Result<Value, String> {
-    geometry["fill"] = fill_param(app);
-    geometry["stroke"] = stroke_param(app);
+    add_paint(app, &mut geometry);
     app.run("shape.create", geometry)
 }
 
-/// The preview and command both use the full float tool colours, including transparent paint.
+fn add_paint(app: &PhotocraftApp, geometry: &mut Value) {
+    let (fill, stroke) = crate::shape_options::paint(app);
+    let paint = photocraft_engine::vector_cmds::shape_paint_params(fill.as_ref(), stroke.as_ref());
+    geometry["fill"] = paint["fill"].clone();
+    geometry["stroke"] = paint["stroke"].clone();
+}
+
+/// The preview and command both use the full paint, including transparent float colours.
 fn shape_preview(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<photocraft_doc::ShapeLayer> {
     let o = &app.ui.tool_options;
     let geometry = shape_geometry(o, tool, start, end, mods)?;
@@ -146,12 +153,8 @@ fn shape_preview(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2]
     } else {
         photocraft_engine::vector_cmds::shape_path(&geometry).ok()?
     };
-    Some(photocraft_doc::ShapeLayer {
-        path,
-        fill: o.shape_fill.then(|| solid_paint(app.session.tools.foreground)),
-        stroke: (o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, solid_paint(app.session.tools.background))),
-        ..Default::default()
-    })
+    let (fill, stroke) = crate::shape_options::paint(app);
+    Some(photocraft_doc::ShapeLayer { path, fill, stroke, ..Default::default() })
 }
 
 /// Shape-tool drag preview using the same path and vector stroke geometry as the commit.
@@ -1132,6 +1135,7 @@ fn selected_shape(session: &photocraft_engine::Session) -> Option<photocraft_doc
 // ---------------------------------------------------------------------------------------------
 // Properties (shape layers)
 
+#[cfg(test)]
 fn solid_paint(c: [f32; 4]) -> photocraft_doc::Fill {
     photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(c[0], c[1], c[2], c[3]))
 }
@@ -1191,21 +1195,25 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     if crate::props_layout::section(ui, "appearance", crate::i18n::tr_ctx(crate::i18n::current(), "shape", "Appearance")) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(tl!("Fill")).color(t.text_dim).size(12.0));
-            if let Some(change) = swatch(ui, sh.fill.as_ref(), app.session.tools.foreground, tl!("Set shape fill type")) {
-                let fill = match change {
-                    PaintChange::None => Value::Null,
-                    PaintChange::Color(color) => json!(color),
-                };
-                edit = Some(json!({"fill": fill, "coalesce": coalesce("fill")}));
+            if let Some(next) = crate::shape_paint_ui::swatch(app, ui, sh.fill.as_ref(), crate::shape_options::fill_color(app), tl!("Set shape fill type")) {
+                let mut patch = json!({"fill":photocraft_engine::vector_cmds::shape_paint_params(next.paint.as_ref(), None)["fill"]});
+                if !next.discrete && let Some(group) = crate::shape_options::edit_key(ui.ctx()) {
+                    patch["coalesce"] = json!(format!("{}-{group}",key("fill")));
+                }
+                edit = Some(patch);
             }
             ui.add_space(12.0);
             ui.label(egui::RichText::new(tl!("Stroke")).color(t.text_dim).size(12.0));
-            if let Some(change) = swatch(ui, sh.stroke.as_ref().map(|s| &s.paint), app.session.tools.foreground, tl!("Set shape stroke type")) {
-                let stroke = match change {
-                    PaintChange::None => Value::Null,
-                    PaintChange::Color(color) => json!({"color": color, "width": enabled_stroke_width(sh.stroke.as_ref().map_or(0.0, |s| s.width))}),
+            if let Some(next) = crate::shape_paint_ui::swatch(app, ui, sh.stroke.as_ref().map(|s| &s.paint), crate::shape_options::stroke_color(app), tl!("Set shape stroke type")) {
+                let mut patch = if next.paint.is_none() {
+                    json!({"stroke": null})
+                } else {
+                    json!({"stroke": {"color": photocraft_engine::vector_cmds::shape_paint_params(next.paint.as_ref(),None)["fill"], "width": sh.stroke.as_ref().map_or(3.0, |s| s.width)}})
                 };
-                edit = Some(json!({"stroke": stroke, "coalesce": coalesce("stroke")}));
+                if !next.discrete && let Some(group) = crate::shape_options::edit_key(ui.ctx()) {
+                    patch["coalesce"] = json!(format!("{}-{group}",key("stroke")));
+                }
+                edit = Some(patch);
             }
             let mut w = sh.stroke.as_ref().map_or(0.0, |s| s.width);
             if crate::widgets::value_field(ui, &mut w, 0.0..=288.0, "px", 60.0).changed() {
@@ -2154,9 +2162,8 @@ mod tests {
         assert_eq!(get_radii(&app), [12.0; 4]);
     }
 
-    /// #534: dragging in a shape's fill picker, opened from the Properties panel at the right edge
-    /// of the window, keeps the picker in place (it flipped from side to side as its width
-    /// followed the colour readouts, which moved it under the pointer).
+    /// #534: the full colour picker opened through Properties at the right edge stays in place
+    /// while its readouts change, and confirming its local draft creates one undo step.
     #[test]
     fn shape_colour_picker_stays_put_while_dragging() {
         use egui::{PointerButton, vec2};
@@ -2191,6 +2198,20 @@ mod tests {
             h.ctx.memory(|m| m.areas().visible_layer_ids().into_iter().filter(|l| l.order == egui::Order::Foreground).find_map(|l| m.area_rect(l.id)))
         };
         let opened = popup(&h).expect("the picker opened");
+        assert!(h.ctx.content_rect().contains_rect(opened), "the Properties palette fits on screen");
+        h.get_by_label("Color Picker").click();
+        h.run_steps(4);
+        let popup = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+            h.ctx.memory(|m| {
+                m.areas()
+                    .visible_layer_ids()
+                    .into_iter()
+                    .filter(|l| l.order == egui::Order::Foreground)
+                    .filter_map(|l| m.area_rect(l.id))
+                    .find(|r| r.width() > 500.0 && r.width() < 1000.0)
+            })
+        };
+        let opened = popup(&h).expect("the full colour picker opened");
         let fill = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
             let st = h.state().session.active().unwrap();
             match &st.doc.layer(photocraft_doc::LayerId(id)).unwrap().content {
@@ -2199,6 +2220,7 @@ mod tests {
             }
         };
         let before = fill(&h);
+        let history = h.state().session.active().unwrap().history.past_len();
         // Drag across the picker's colour area.
         let start = opened.min + vec2(60.0, opened.height() * 0.5);
         h.hover_at(start);
@@ -2212,7 +2234,13 @@ mod tests {
             assert!(h.ctx.content_rect().contains_rect(r), "step {i}: {r:?} runs off the window");
         }
         press(&mut h, start, false);
+        assert_eq!(fill(&h), before, "the picker keeps its draft local until OK");
+        h.get_by_label("OK").click();
+        h.run_steps(3);
         assert_ne!(fill(&h), before, "the drag picked a colour");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(fill(&h), before);
     }
 
     /// The options bar edits the selected shape's fill and stroke.
@@ -2231,7 +2259,7 @@ mod tests {
             }
         };
         assert!(shape(&app).0.is_some() && shape(&app).1.is_none());
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1100.0, 48.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1100.0, 720.0)).build_ui_state(
             |ui, app: &mut PhotocraftApp| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     ui.horizontal_centered(|ui| options_bar(app, ui, Tool::Rectangle));
@@ -2242,14 +2270,9 @@ mod tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
         h.run_steps(4);
         let click_fill = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>| {
-            let label = h.query_all(egui_kittest::kittest::by().label("Fill:").include_labels()).next().expect("the Fill label").rect();
-            let at = egui::pos2(label.right() + h.ctx.global_style().spacing.item_spacing.x + 7.0, label.center().y);
-            h.hover_at(at);
-            h.step();
-            for pressed in [true, false] {
-                h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
-                h.step();
-            }
+            h.get_by_label("Fill color").click();
+            h.run_steps(3);
+            h.get_by_label("No Color").click();
             h.run_steps(2);
         };
         // Stroke width.
@@ -2266,8 +2289,8 @@ mod tests {
         assert_eq!(stroke.paint, photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(0.0, 0.0, 1.0, 1.0)));
         // Fill off.
         click_fill(&mut h);
-        assert_eq!(shape(h.state()).0, None, "unchecking Fill removed the shape's fill");
-        assert!(!h.state().ui.tool_options.shape_fill, "and the next shape has none either");
+        assert_eq!(shape(h.state()).0, None, "No Color removes the selected shape's fill");
+        assert!(!h.state().ui.tool_options.shape_fill, "a successful toolbar edit also seeds the next shape's default");
         h.state_mut().run("edit.undo", json!({})).unwrap();
         assert!(shape(h.state()).0.is_some());
         // No shape selected: no edit.
@@ -2306,14 +2329,9 @@ mod tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
         h.run_steps(4);
         let click_fill = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>| {
-            let label = h.query_all(egui_kittest::kittest::by().label("Fill:").include_labels()).next().expect("the Fill label").rect();
-            let at = egui::pos2(label.right() + h.ctx.global_style().spacing.item_spacing.x + 7.0, label.center().y);
-            h.hover_at(at);
-            h.step();
-            for pressed in [true, false] {
-                h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
-                h.step();
-            }
+            h.get_by_label("Fill color").click();
+            h.run_steps(3);
+            h.get_by_label("No Color").click();
             h.run_steps(2);
         };
         // Stroke width field is available on Path Selection bar too.
@@ -2330,7 +2348,7 @@ mod tests {
         assert_eq!(stroke.paint, photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(0.0, 0.0, 1.0, 1.0)));
         // Fill toggle.
         click_fill(&mut h);
-        assert_eq!(shape(h.state()).0, None, "unchecking Fill removed the shape's fill");
+        assert_eq!(shape(h.state()).0, None, "No Color removed the shape's fill");
         // No shape selected: renders hint text instead.
         h.state_mut().run("layer.new.layer", json!({})).unwrap();
         h.run_steps(2);
