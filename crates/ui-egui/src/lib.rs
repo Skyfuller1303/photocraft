@@ -175,8 +175,12 @@ pub mod scrollbars;
 mod scrub_wrap;
 pub mod select_mask_view;
 pub mod served_fonts;
+mod shape_canvas;
 pub mod shape_dialog;
 pub(crate) mod shape_fill_ui;
+mod shape_modes;
+mod shape_options;
+mod shape_paint_ui;
 pub mod shape_stroke_ui;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
@@ -658,6 +662,8 @@ pub struct PhotocraftApp {
     pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
     /// Move-tool ⇧/⌥ drag state (move_mods).
     pub(crate) move_mods: move_mods::MoveDrag,
+    /// Live rectangle corner-radius gesture (shape_canvas).
+    pub(crate) shape_canvas: shape_canvas::State,
     /// Cached document for a modal text Style Options color preview.
     pub(crate) text_style_preview: Option<type_panels_ui::color_picker::Preview>,
     /// Live Layer Style dialog preview: (key over revision + style fields, preview or validation error).
@@ -856,6 +862,7 @@ impl PhotocraftApp {
             clip_read_for_paste: false,
             transform_preview: None,
             move_mods: Default::default(),
+            shape_canvas: Default::default(),
             style_preview: None,
             text_style_preview: None,
             solid_fill_preview: None,
@@ -1803,6 +1810,7 @@ impl eframe::App for PhotocraftApp {
         let dpi = self.session.active().map_or(72.0, |d| f64::from(d.doc.resolution_dpi.max(1.0)));
         crate::widgets::set_field_resolution(&ctx, dpi, ppi);
         // View › Screen Mode › Full Screen Mode: only the image, on black (F or Esc returns).
+        shape_paint_ui::prune(self, &ctx);
         screen_picker::show(&ctx);
         if screen_picker::busy(&ctx) && screen_picker::showing(&ctx) {
             egui::Modal::new(egui::Id::new("screen-color-wait")).show(&ctx, |ui| {

@@ -1388,6 +1388,8 @@ mod multi_layer_formatting {
             app,
         );
         PhotocraftApp::setup_context(&h.ctx, Default::default());
+        // Formatting assertions need stable frames; caret blinking deliberately schedules repaints.
+        h.ctx.all_styles_mut(|style| style.visuals.text_cursor.blink = false);
         h.run_steps(4);
         h
     }

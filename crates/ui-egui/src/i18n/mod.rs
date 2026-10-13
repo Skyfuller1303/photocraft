@@ -297,6 +297,11 @@ impl Lang {
     fn catalog(self) -> &'static Catalog {
         self.0.catalog()
     }
+
+    #[cfg(test)]
+    pub(crate) fn has_plain_translation(self, source: &str) -> bool {
+        self.catalog().plain(source).is_some_and(|translation| !translation.is_empty())
+    }
 }
 
 /// Candidate language codes for a locale tag, most specific first: `zh_TW.UTF-8` →

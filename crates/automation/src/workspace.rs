@@ -805,6 +805,17 @@ mod tests {
     }
 
     #[test]
+    fn installed_profile_discovery_is_denied_before_ambient_filesystem_access() {
+        let mut headless = crate::headless::Headless::new();
+        for params in [serde_json::json!({}), serde_json::json!({"class": "output", "colorSpace": "rgb"})] {
+            assert!(authorize_engine_command("edit.installedProfiles", &params).is_err());
+            assert!(authorize_desktop_engine_command("edit.installedProfiles", &params).is_err());
+            let error = headless.command_run("edit.installedProfiles", params).unwrap_err();
+            assert!(error.to_string().contains("ambient filesystem paths"), "{error}");
+        }
+    }
+
+    #[test]
     fn registry_filesystem_path_params_are_classified() {
         let probe = serde_json::json!({
             "path": "/outside/photocraft-probe",
@@ -842,12 +853,16 @@ mod tests {
                 | "filter.render.flame"
                 | "shape.create"
                 | "shape.edit"
+                | "shape.drawPixels"
                 | "shape.info"
                 | "shape.presets.list"
                 | "shape.presets.new"
                 | "path.list"
                 | "path.info"
                 | "path.set"
+                | "path.merge"
+                | "path.align"
+                | "path.arrange"
                 | "path.transform"
                 | "path.moveAnchors"
                 | "path.moveHandle"

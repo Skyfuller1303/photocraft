@@ -45,6 +45,190 @@ fn whole_layer_bounds(layer: &Layer) -> Rect {
     if content.is_empty() { layer.mask.as_ref().map_or(Rect::EMPTY, |m| photocraft_compose::bounds::content_bounds(&m.surface)) } else { content }
 }
 
+/// Stages a shape's affine transform without changing the session or history. The normal
+/// compositor retains its layer order, clipping, blend mode, effects and linked masks.
+pub fn preview_shape_transform(doc: &Document, id: LayerId, affine: Affine, interpolation: &str) -> Result<Document> {
+    let mut shown = preview_shape_transform_geometry(doc, id, affine, interpolation)?;
+    if let Some(Layer { content: LayerContent::Shape(shape), .. }) = shown.layer_mut(id) {
+        crate::vector_cmds::refresh_shape(doc, shape);
+    }
+    Ok(shown)
+}
+
+/// Stages a shape's four-corner transform with the same vector projection as the command.
+pub fn preview_shape_quad_transform(doc: &Document, id: LayerId, rect: [f64; 4], quad: [[f64; 2]; 4], interpolation: &str) -> Result<Document> {
+    let h = Homography::rect_to_quad(rect, quad).ok_or_else(|| bad("degenerate quad"))?;
+    if !h.0.iter().all(|v| v.is_finite()) || h.inverse().is_none() {
+        return Err(bad("the transform collapses the layer"));
+    }
+    let m = h.0;
+    if m[6].abs() < 1e-12 && m[7].abs() < 1e-12 {
+        let affine = Affine { m: [m[0] / m[8], m[3] / m[8], m[1] / m[8], m[4] / m[8], m[2] / m[8], m[5] / m[8]] };
+        return preview_shape_transform(doc, id, affine, interpolation);
+    }
+    let group = group_locks(doc, id);
+    let mut shown = doc.clone();
+    let layer = shown.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+    if !matches!(layer.content, LayerContent::Shape(_)) {
+        return Err(bad("preview target is not a shape layer"));
+    }
+    transform_layer(None, group, layer, &h, None, Interp::parse(interpolation))?;
+    if let LayerContent::Shape(shape) = &mut layer.content {
+        crate::vector_cmds::refresh_shape(doc, shape);
+    }
+    Ok(shown)
+}
+
+/// Stages geometry and linked masks without rasterizing the shape. Reduced previews supply
+/// their own bounded cache; the committed command still refreshes at document resolution.
+pub fn preview_shape_transform_geometry(doc: &Document, id: LayerId, affine: Affine, interpolation: &str) -> Result<Document> {
+    preview_shape_geometry(doc, id, affine, interpolation, None)
+}
+
+/// Bounded live preview: linked pixel-mask pixels come from a source-revision cache.
+pub fn preview_shape_transform_geometry_clipped(
+    doc: &Document,
+    id: LayerId,
+    affine: Affine,
+    interpolation: &str,
+    clip: Rect,
+    mask: Option<&PreparedShapeMask>,
+) -> Result<Document> {
+    preview_shape_geometry(doc, id, affine, interpolation, Some((clip, mask)))
+}
+
+fn preview_shape_geometry(
+    doc: &Document,
+    id: LayerId,
+    affine: Affine,
+    interpolation: &str,
+    clipped: Option<(Rect, Option<&PreparedShapeMask>)>,
+) -> Result<Document> {
+    if clipped.is_some_and(|(r, _)| u64::from(r.width()) * u64::from(r.height()) > 2048 * 2048) {
+        return Err(bad("preview mask destination exceeds the bounded cache"));
+    }
+    if !affine.m.iter().all(|v| v.is_finite()) || affine.inverse().is_none() {
+        return Err(bad("the transform collapses the layer"));
+    }
+    let group = group_locks(doc, id);
+    let mut shown = doc.clone();
+    let layer = shown.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+    if !matches!(layer.content, LayerContent::Shape(_)) {
+        return Err(bad("preview target is not a shape layer"));
+    }
+    let [a, b, c, d, e, f] = affine.m;
+    let h = Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0]);
+    let moving_mask = if clipped.is_some() && layer.mask.as_ref().is_some_and(|m| m.linked) { layer.mask.take() } else { None };
+    transform_layer(None, group, layer, &h, Some(affine), Interp::parse(interpolation))?;
+    if let Some(mut moving) = moving_mask {
+        let Some((clip, Some(prepared))) = clipped else { return Err(bad("linked preview mask has no prepared source")) };
+        moving.surface = prepared.warp(&h, Interp::parse(interpolation), clip)?;
+        layer.mask = Some(moving);
+    }
+    if let LayerContent::Shape(shape) = &mut layer.content {
+        photocraft_vector::flatten::validate_shape(&shape.path, shape.stroke.as_ref()).map_err(bad)?;
+        shape.cache = None;
+    }
+    Ok(shown)
+}
+
+/// A gray mask's alpha-bearing source, prepared once for a reduced preview revision.
+/// Power-of-two pre-reductions reuse the normal bicubic warp's exact sampling.
+pub struct PreparedShapeMask {
+    format: PixelFormat,
+    default: f32,
+    source: Surface,
+    bounds: Rect,
+    reduced: std::sync::Mutex<std::collections::BTreeMap<u64, std::sync::Arc<Surface>>>,
+}
+
+impl PreparedShapeMask {
+    pub fn new(mask: &Surface) -> Result<Self> {
+        let format = mask.format();
+        let bounds = mask.content_bounds();
+        if format.alpha || format.channels() != 1 || u64::from(bounds.width()) * u64::from(bounds.height()) > 2048 * 2048 {
+            return Err(bad("preview mask source exceeds the bounded gray-mask cache"));
+        }
+        let mut source = Surface::new(PixelFormat::new(format.mode, format.sample, true));
+        if !bounds.is_empty() {
+            let pixels = crate::allocation::read_region(mask, bounds, "preparing a preview mask")?;
+            let mut lifted =
+                crate::allocation::filled(pixels.len().checked_mul(2).ok_or_else(|| bad("the preview mask is too large"))?, 0.0, "preparing a preview mask")?;
+            for (g, pair) in pixels.iter().zip(lifted.as_chunks_mut::<2>().0) {
+                pair.copy_from_slice(&[*g, 1.0]);
+            }
+            source.try_write_region(bounds, &lifted)?;
+        }
+        Ok(Self {
+            format,
+            default: mask.default_pixel().first().copied().unwrap_or(0.0),
+            source,
+            bounds,
+            reduced: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+        })
+    }
+
+    pub fn warp_clipped(&self, affine: Affine, interpolation: &str, clip: Rect) -> Result<Surface> {
+        let [a, b, c, d, e, f] = affine.m;
+        self.warp(&Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0]), Interp::parse(interpolation), clip)
+    }
+
+    fn warp(&self, h: &Homography, interpolation: Interp, clip: Rect) -> Result<Surface> {
+        let mut out = Surface::with_default(self.format, &[self.default]);
+        if self.bounds.is_empty() || clip.is_empty() || u64::from(clip.width()) * u64::from(clip.height()) > 2048 * 2048 {
+            return Ok(out);
+        }
+        let center = ((f64::from(self.bounds.x0) + f64::from(self.bounds.x1)) / 2.0, (f64::from(self.bounds.y0) + f64::from(self.bounds.y1)) / 2.0);
+        let scale = h.local_scale(center.0, center.1);
+        // Match the committed warp: only Bicubic prefilters downscales, using the
+        // whole local scale. Bilinear samples the original mask directly.
+        let warped = if interpolation == Interp::Bicubic && scale > 0.0 && scale < 0.999 {
+            let factor = scale.max(1.0 / 64.0);
+            let reduced = {
+                let mut cache = self.reduced.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(existing) = cache.get(&factor.to_bits()) {
+                    existing.clone()
+                } else {
+                    // Dragging can request many distinct scales; cap retained reductions
+                    // without retaining hundreds of tiny tiles.
+                    if cache.len() >= 32 {
+                        cache.pop_first();
+                    }
+                    let reduced = std::sync::Arc::new(photocraft_algo::resample::resize_surface(
+                        &self.source,
+                        factor,
+                        factor,
+                        photocraft_algo::resample::Resample::Bicubic,
+                    ));
+                    cache.insert(factor.to_bits(), reduced.clone());
+                    reduced
+                }
+            };
+            let h = h.mul(&Homography([1.0 / factor, 0.0, 0.0, 0.0, 1.0 / factor, 0.0, 0.0, 0.0, 1.0]));
+            photocraft_algo::transform::warp_surface_clipped(
+                &reduced,
+                photocraft_algo::resample::scaled_rect(self.bounds, factor, factor),
+                &h,
+                interpolation,
+                clip,
+            )
+        } else {
+            photocraft_algo::transform::warp_surface_clipped(&self.source, self.bounds, h, interpolation, clip)
+        }?;
+        let area = warped.content_bounds().intersect(&clip);
+        if !area.is_empty() {
+            let pixels = crate::allocation::read_region(&warped, area, "flattening a preview mask")?;
+            let mut values = crate::allocation::filled(pixels.len() / 2, 0.0, "flattening a preview mask")?;
+            for (p, value) in pixels.as_chunks::<2>().0.iter().zip(&mut values) {
+                *value = p[0] * p[1] + self.default * (1.0 - p[1]);
+            }
+            out.try_write_region(area, &values)?;
+        }
+        out.prune();
+        Ok(out)
+    }
+}
+
 /// Warp a surface whose pixels outside the content read as `default` (masks, selections):
 /// warp the content with alpha, then flatten back onto the default value.
 pub(crate) fn warp_gray(s: &Surface, h: &Homography, interp: Interp) -> Result<Surface> {
@@ -359,11 +543,16 @@ fn apply_transform(
             };
             t.transform = a.mul(&t.transform);
         }
-        LayerContent::Shape(sh) => match affine {
-            Some(a) => crate::vector_cmds::transform_shape(sh, &a),
-            // Distort and Perspective map the path and keep the shape (#3009).
-            None => crate::vector_cmds::map_shape(sh, Some(h), None)?,
-        },
+        LayerContent::Shape(sh) => {
+            if let Some(a) = affine {
+                crate::vector_cmds::transform_shape(sh, &a);
+            } else {
+                sh.path = project_path(&sh.path, h)?;
+                photocraft_vector::flatten::validate_shape(&sh.path, sh.stroke.as_ref()).map_err(bad)?;
+                sh.live = None;
+                sh.psd_raw = None;
+            }
+        }
         LayerContent::Smart(sm) => {
             // Smart objects keep the transform and re-render from their source afterwards
             // (`refresh_text`), so repeated transforms don't degrade the pixels. Distort and
@@ -401,6 +590,17 @@ fn apply_transform(
     if let Some(m) = l.mask.as_mut()
         && m.linked
     {
+        if affine.is_none()
+            && let Some(bounds) = mask_projection_bounds(&m.surface)
+        {
+            if (bounds.2 - bounds.0) * (bounds.3 - bounds.1) > 64.0 * 1024.0 * 1024.0 {
+                return Err(bad("mask source exceeds the 64M pixel transform budget"));
+            }
+            let (bounds, _) = projective_bounds(h, bounds)?;
+            if (bounds.2 - bounds.0 + 2.0).ceil() * (bounds.3 - bounds.1 + 2.0).ceil() > 64.0 * 1024.0 * 1024.0 {
+                return Err(bad("projected mask exceeds the 64M pixel transform budget"));
+            }
+        }
         m.surface = match mask_sel {
             Some(sel) => warp_gray_selected(&m.surface, sel, h, interp)?,
             None => warp_gray(&m.surface, h, interp)?,
@@ -411,10 +611,101 @@ fn apply_transform(
     {
         vm.path = match affine {
             Some(a) => vm.path.transform(&a),
-            None => crate::vector_cmds::map_path(&vm.path, Some(h), None)?,
+            None => project_path(&vm.path, h)?,
         };
     }
     Ok(())
+}
+
+fn mask_projection_bounds(surface: &Surface) -> Option<(f64, f64, f64, f64)> {
+    let b = surface.content_bounds();
+    (!b.is_empty()).then_some((f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)))
+}
+
+/// Bounds and a conservative Jacobian norm over a rectangle that cannot cross the horizon.
+fn projective_bounds(h: &Homography, bounds: (f64, f64, f64, f64)) -> Result<((f64, f64, f64, f64), f64)> {
+    let m = h.0;
+    if !m.iter().all(|v| v.is_finite()) {
+        return Err(bad("projective transform must be finite"));
+    }
+    let (x0, y0, x1, y1) = bounds;
+    let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)];
+    let weights = corners.map(|(x, y)| m[6] * x + m[7] * y + m[8]);
+    let sign = weights[0].is_sign_positive();
+    if weights.iter().any(|w| !w.is_finite() || w.abs() < 1e-12 || w.is_sign_positive() != sign) {
+        return Err(bad("projective transform crosses the path horizon"));
+    }
+    let min_weight = weights.iter().map(|w| w.abs()).fold(f64::INFINITY, f64::min);
+    let mut derivative = [0.0f64; 4];
+    let mut projected = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for (x, y) in corners {
+        let (u, v) = h.apply(x, y);
+        if !u.is_finite() || !v.is_finite() || u.abs() > 1_000_000.0 || v.abs() > 1_000_000.0 {
+            return Err(bad("projected coordinates must be finite and within ±1000000 px"));
+        }
+        projected = (projected.0.min(u), projected.1.min(v), projected.2.max(u), projected.3.max(v));
+        let numerators = [
+            (m[0] * m[7] - m[6] * m[1]) * y + m[0] * m[8] - m[6] * m[2],
+            (m[1] * m[6] - m[7] * m[0]) * x + m[1] * m[8] - m[7] * m[2],
+            (m[3] * m[7] - m[6] * m[4]) * y + m[3] * m[8] - m[6] * m[5],
+            (m[4] * m[6] - m[7] * m[3]) * x + m[4] * m[8] - m[7] * m[5],
+        ];
+        for (maximum, value) in derivative.iter_mut().zip(numerators) {
+            *maximum = maximum.max(value.abs());
+        }
+    }
+    let stretch = derivative.iter().map(|v| v * v).sum::<f64>().sqrt() / min_weight.powi(2);
+    if !stretch.is_finite() {
+        return Err(bad("projective curve precision exceeds the bounded path budget"));
+    }
+    Ok((projected, stretch))
+}
+
+/// A homography maps cubic curves to rational curves. Keep vector edges with at most 0.25 px
+/// deviation by flattening the source finely enough for the mapping's bounded stretch.
+fn project_path(path: &photocraft_doc::Path, h: &Homography) -> Result<photocraft_doc::Path> {
+    use photocraft_doc::{Knot, Subpath};
+    if !h.0.iter().all(|v| v.is_finite()) {
+        return Err(bad("projective transform must be finite"));
+    }
+    photocraft_vector::flatten::validate_shape(path, None).map_err(bad)?;
+    let Some(bounds) = path.control_bounds() else { return Ok(path.clone()) };
+    let (_, stretch) = projective_bounds(h, bounds)?;
+    let tolerance = 0.25 / stretch.max(1.0);
+    if tolerance < 1e-4 && path.subpaths.iter().flat_map(|s| &s.knots).any(|k| k.in_ctrl != k.anchor || k.out_ctrl != k.anchor) {
+        return Err(bad("projective curve precision exceeds the bounded path budget"));
+    }
+    let mut result = path.clone();
+    let mut total = 0;
+    for (source, target) in path.subpaths.iter().zip(&mut result.subpaths) {
+        target.knots.clear();
+        if let Some(first) = source.knots.first() {
+            let (x, y) = h.apply(first.anchor.x, first.anchor.y);
+            target.knots.push(Knot::corner(x, y));
+            total += 1;
+        }
+        let segments = source.segments();
+        for (i, &[p0, c1, c2, p1]) in segments.iter().enumerate() {
+            let segment = Subpath {
+                knots: vec![Knot { anchor: p0, in_ctrl: p0, out_ctrl: c1, smooth: false }, Knot { anchor: p1, in_ctrl: c2, out_ctrl: p1, smooth: false }],
+                ..Default::default()
+            };
+            // One source segment bounds the temporary allocation even when the projected
+            // path would exceed its total knot budget.
+            let flattened = photocraft_vector::flatten::flatten_subpath(&segment, tolerance);
+            let end = flattened.pts.len().saturating_sub(usize::from(source.closed && i + 1 == segments.len()));
+            total += end.saturating_sub(1);
+            if total > 4096 {
+                return Err(bad("projected shape exceeds 4096 path knots"));
+            }
+            for &(x, y) in flattened.pts.iter().take(end).skip(1) {
+                let (x, y) = h.apply(x, y);
+                target.knots.push(Knot::corner(x, y));
+            }
+        }
+    }
+    photocraft_vector::flatten::validate_shape(&result, None).map_err(bad)?;
+    Ok(result)
 }
 
 /// Split a layer surface by a selection: (selected pixels, everything else), both with alpha.

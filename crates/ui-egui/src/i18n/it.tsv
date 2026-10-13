@@ -806,6 +806,23 @@
 	Statistics…	Statistiche…
 	Refine Strokes	Tracce di perfezionamento
 @plural	{n} item|{n} items	{n} elemento|{n} elementi
+
+# Plural status messages (complete catalog coverage)
+@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	{n} campione esportato in {file}|{n} campioni esportati in {file}
+@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	{n} pennello importato da {group}|{n} pennelli importati da {group}
+@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{n} campione importato da {file}|{n} campioni importati da {file}
+@plural	Played {n} step|Played {n} steps	{n} passaggio riprodotto|{n} passaggi riprodotti
+@plural	Saved for Web: {n} file|Saved for Web: {n} files	Salvato per il Web: {n} file|Salvato per il Web: {n} file
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	{n} oggetto avanzato collegato modificato su disco aggiornato|{n} oggetti avanzati collegati modificati su disco aggiornati
+@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	{n} livello registrato da questa composizione è stato eliminato. Aggiorna la composizione o cancella l'avviso.|{n} livelli registrati da questa composizione sono stati eliminati. Aggiorna la composizione o cancella l'avviso.
+@plural	{n} plane|{n} planes	{n} piano|{n} piani
+@plural	{n} preset|{n} presets	{n} predefinito|{n} predefiniti
+@plural	{n} sample point removed|{n} sample points removed	{n} punto di campionamento rimosso|{n} punti di campionamento rimossi
+@plural	{n} slice|{n} slices	{n} sezione|{n} sezioni
+@plural	{n} step|{n} steps	{n} passaggio|{n} passaggi
+@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} altro avviso sui predefiniti pennello)|{warning} (+{n} altri avvisi sui predefiniti pennello)
+@plural	{what} with {n} warning|{what} with {n} warnings	{what} con {n} avviso|{what} con {n} avvisi
+
 	Auto	Automatico
 
 # Dialogs and panels
@@ -1309,6 +1326,7 @@
 	Offset	Scostamento
 	Only Web Colors	Solo colori web
 	Opacity	Opacità
+	Stop opacity	Opacità del punto
 	Opacity Jitter	Variazione opacità
 	Opacity:	Opacità:
 	Open a document to define variables.	Apri un documento per definire variabili.
@@ -2636,6 +2654,33 @@ fontWeight	Italic	Corsivo
 	Quick Selection found nothing there	Selezione rapida non ha trovato nulla lì
 	Object Selection found nothing there — try a tighter rectangle	Selezione oggetto non ha trovato nulla lì — prova un rettangolo più stretto
 	No subject found — try a rectangle around the object	Nessun soggetto trovato — prova un rettangolo attorno all'oggetto
+	Align to Canvas	Allinea alla tela
+	Arrowheads	Punte delle frecce
+	Bring Shape Forward	Porta forma avanti
+	Bring Shape to Front	Porta forma in primo piano
+	Constrain Proportions	Mantieni proporzioni
+	Distribute Horizontally	Distribuisci orizzontalmente
+	Distribute Vertically	Distribuisci verticalmente
+	End	Fine
+	New Path	Nuovo tracciato
+	Path Alignment	Allineamento tracciati
+	Path Arrangement	Ordine dei tracciati
+	Path Operations	Operazioni sui tracciati
+	Path Options	Opzioni tracciato
+	Send Shape Backward	Porta forma indietro
+	Send Shape to Back	Porta forma sullo sfondo
+	Show Path	Mostra tracciato
+	Start	Inizio
+	Align Edges	Allinea bordi
+	Unconstrained	Senza vincoli
+	Proportional	Proporzionale
+	Smooth Indents	Smussa rientranze
+	Concavity:	Concavità:
+	Solid Color	Colore pieno
+	Color Picker	Selettore colore
+	Recent Colors	Colori recenti
+	No recent colors	Nessun colore recente
+	Color opacity	Opacità del colore
 	Click the first point or press {key} to close · {del} removes a point · Esc cancels	Fai clic sul primo punto o premi {key} per chiudere · {del} rimuove un punto · Esc annulla
 	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	Fai clic e segui un bordo · fai clic per fissare un punto · {alt}-clic per un segmento dritto · doppio clic per chiudere
 	Follows only edges this close to the pointer ([ and ] change it)	Segue solo i bordi così vicini al puntatore ([ e ] lo cambiano)
@@ -2758,20 +2803,6 @@ curves	Smooth	Leviga
 	The layer or its mask changed. Drag the mask onto the Trash again.	Il livello o la sua maschera è cambiato. Trascina di nuovo la maschera nel cestino.
 	Delete the vector mask?	Eliminare la maschera vettoriale?
 # Counted status messages and labels (#3454; adapted from PR #3821)
-@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	{n} campione esportato in {file}|{n} campioni esportati in {file}
-@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	{n} pennello importato da {group}|{n} pennelli importati da {group}
-@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{n} campione importato da {file}|{n} campioni importati da {file}
-@plural	Played {n} step|Played {n} steps	{n} passaggio riprodotto|{n} passaggi riprodotti
-@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	{n} oggetto avanzato collegato modificato su disco aggiornato|{n} oggetti avanzati collegati modificati su disco aggiornati
-@plural	Saved for Web: {n} file|Saved for Web: {n} files	Salvato per il Web: {n} file|Salvato per il Web: {n} file
-@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	{n} livello registrato da questa composizione è stato eliminato. Aggiorna la composizione o cancella l'avviso.|{n} livelli registrati da questa composizione sono stati eliminati. Aggiorna la composizione o cancella l'avviso.
-@plural	{n} plane|{n} planes	{n} piano|{n} piani
-@plural	{n} preset|{n} presets	{n} predefinito|{n} predefiniti
-@plural	{n} sample point removed|{n} sample points removed	{n} punto di campionamento rimosso|{n} punti di campionamento rimossi
-@plural	{n} slice|{n} slices	{n} sezione|{n} sezioni
-@plural	{n} step|{n} steps	{n} passaggio|{n} passaggi
-@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} altro avviso sui predefiniti pennello)|{warning} (+{n} altri avvisi sui predefiniti pennello)
-@plural	{what} with {n} warning|{what} with {n} warnings	{what} con {n} avviso|{what} con {n} avvisi
 # View › Guides › New Guide… › Color
 	Light Blue	Blu chiaro
 	Light Red	Rosso chiaro
@@ -2918,7 +2949,6 @@ curves	Smooth	Leviga
 	Path:	Tracciato:
 	Path to Illustrator…	Tracciato in Illustrator…
 	Clipping Path	Tracciato di ritaglio
-	New Path	Nuovo tracciato
 	Duplicate Path	Duplica tracciato
 	Auto-Hide	Nascondi automaticamente
 	X	X
@@ -3156,7 +3186,6 @@ layerLabel	No Color	Nessun colore
 	Actual Pixels	Pixel effettivi
 	Clipping Mask	Maschera di ritaglio
 	Tool Options	Opzioni strumento
-	Color Picker	Selettore colore
 	Color Swatches	Campioni colore
 	Linear Dodge	Scherma lineare
 	Preview Image	Anteprima immagine
@@ -3861,7 +3890,6 @@ layerLabel	No Color	Nessun colore
 	Smart Blur	Sfocatura avanzata
 	Smart Sharpen	Contrasto intelligente
 	Smudge Stick	Bastoncino sfumino
-	Solid Color	Colore pieno
 	Spherize	Sferizza
 	Spin Blur	Sfocatura rotazione
 	Spot	Faretto

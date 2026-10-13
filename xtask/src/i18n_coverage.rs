@@ -564,6 +564,20 @@ mod tests {
     }
 
     #[test]
+    fn plural_message_forms_follow_strings_in_language_and_count_arguments() {
+        let sources = vec![(
+            PathBuf::from("ui.rs"),
+            r#"trn(Lang::from_code("en"), r["files"].as_array().map_or(0, Vec::len) as u64,
+                "Saved for Web: {n} file", "Saved for Web: {n} files");"#
+                .into(),
+        )];
+        assert_eq!(
+            plural_keys(&sources),
+            BTreeSet::from([Key { context: "@plural".into(), source: "Saved for Web: {n} file|Saved for Web: {n} files".into() }]),
+        );
+    }
+
+    #[test]
     fn source_key_set_is_covered_by_complete_catalogs() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap_or(Path::new("."));
         let keys = source_keys(root).unwrap_or_default();

@@ -1342,6 +1342,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     // Every theme gets the font, style and size controls (#1387), as with Auto-Select (#1275).
                     Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => crate::type_tool::options_bar(app, ui),
                     Tool::Move if t.pro => {
+                        let shape = crate::canvas::shape_transform_controls_target(app);
                         let o = &mut app.ui.tool_options;
                         widgets::checkbox(ui, &mut o.move_auto_select, tl!("Auto-Select:"));
                         widgets::dropdown(
@@ -1352,7 +1353,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             76.0,
                         );
                         widgets::vline(ui, 22.0);
-                        widgets::checkbox(ui, &mut o.move_show_transform, tl!("Show Transform Controls"));
+                        widgets::checkbox(ui, if shape { &mut o.shape.show_transform } else { &mut o.move_show_transform }, tl!("Show Transform Controls"));
                         widgets::vline(ui, 22.0);
                         ui.spacing_mut().item_spacing.x = 0.0;
                         for (icon, tip, cmd) in [
@@ -1402,8 +1403,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         ),
                     ),
                     Tool::Move => {
-                        // The Studio themes keep Photoshop's Auto-Select toggle too (#1275).
-                        widgets::checkbox(ui, &mut app.ui.tool_options.move_auto_select, tl!("Auto-Select:"));
+                        // The Studio themes keep the Move tool's selection and transform toggles too.
+                        let shape = crate::canvas::shape_transform_controls_target(app);
+                        let o = &mut app.ui.tool_options;
+                        widgets::checkbox(ui, &mut o.move_auto_select, tl!("Auto-Select:"));
+                        widgets::checkbox(ui, if shape { &mut o.shape.show_transform } else { &mut o.move_show_transform }, tl!("Show Transform Controls"));
                         hint(ui, tl!("Drag to move the active layer"));
                     }
                     Tool::Eyedropper => crate::eyedropper_ui::options(app, ui),
@@ -5611,6 +5615,75 @@ mod clipping_indicator_tests;
 #[cfg(test)]
 #[path = "mask_props_ui_tests.rs"]
 mod mask_properties_tests;
+
+#[cfg(test)]
+mod move_options_tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    fn harness(app: PhotocraftApp, theme: crate::theme::ThemeKind) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(960.0, 60.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    options_bar(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, theme);
+        h.run_steps(4);
+        h
+    }
+
+    #[test]
+    fn studio_move_transform_toggle_changes_only_the_existing_option() {
+        for theme in [crate::theme::ThemeKind::Studio, crate::theme::ThemeKind::StudioLight] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width":64,"height":64})).unwrap();
+            app.ui.tool = Tool::Move;
+            let mut h = harness(app, theme);
+            let before = h.state().session.active().unwrap().doc.clone();
+            let history = h.state().session.active().unwrap().history.past_len();
+            let auto_select = h.state().ui.tool_options.move_auto_select;
+            let shape_transform = h.state().ui.tool_options.shape.show_transform;
+            assert!(!h.state().ui.tool_options.move_show_transform);
+            for expected in [true, false] {
+                h.get_by_label("Show Transform Controls").click();
+                h.run_steps(2);
+                assert_eq!(h.state().ui.tool_options.move_show_transform, expected, "{theme:?}");
+                assert_eq!(h.state().ui.tool_options.shape.show_transform, shape_transform);
+                assert_eq!(h.state().ui.tool_options.move_auto_select, auto_select);
+                assert_eq!(h.state().session.active().unwrap().doc, before);
+                assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+            }
+        }
+    }
+
+    #[test]
+    fn selected_shape_transform_toggle_defaults_on_and_keeps_raster_move_option() {
+        for theme in [crate::theme::ThemeKind::ProMedium, crate::theme::ThemeKind::Studio, crate::theme::ThemeKind::StudioLight] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width":64,"height":64})).unwrap();
+            app.run("shape.create", json!({"kind":"rect","rect":[8,8,32,24]})).unwrap();
+            app.ui.tool = Tool::Move;
+            let mut h = harness(app, theme);
+            let before = h.state().session.active().unwrap().doc.clone();
+            let history = h.state().session.active().unwrap().history.past_len();
+            let auto_select = h.state().ui.tool_options.move_auto_select;
+            assert!(h.state().ui.tool_options.shape.show_transform);
+            assert!(!h.state().ui.tool_options.move_show_transform);
+            for expected in [false, true] {
+                h.get_by_label("Show Transform Controls").click();
+                h.run_steps(2);
+                assert_eq!(h.state().ui.tool_options.shape.show_transform, expected, "{theme:?}");
+                assert!(!h.state().ui.tool_options.move_show_transform);
+                assert_eq!(h.state().ui.tool_options.move_auto_select, auto_select);
+                assert_eq!(h.state().session.active().unwrap().doc, before);
+                assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod compact_visual_regressions {

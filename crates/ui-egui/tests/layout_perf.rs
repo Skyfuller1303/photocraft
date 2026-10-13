@@ -106,6 +106,9 @@ fn move_drag_follows_the_pointer_and_is_one_undo_step() {
     actual_pixels(&mut h);
     h.state_mut().ui.tool = Tool::Move;
     h.state_mut().ui.tool_options.move_auto_select = false;
+    // This test drags the first visible pixel of tiny layers. With automatic shape controls,
+    // that pixel can be a resize grip; disable controls to exercise the translation contract.
+    h.state_mut().ui.tool_options.shape.show_transform = false;
     for id in [k.text, k.shape, k.group, k.smart, k.pixel] {
         h.state_mut().run("layer.select", json!({"layer": id.0})).expect("select");
         h.run_steps(2);

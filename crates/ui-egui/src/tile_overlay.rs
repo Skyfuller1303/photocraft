@@ -63,7 +63,8 @@ fn content_hash(t: &Tile) -> u64 {
 
 /// Every stored tile of `s` with its shared-pixels group. Groups are numbered in tile order, so
 /// the same surface always gets the same colours. `parallel` hashes on the Rayon pool; pass
-/// false while jobs hold it, so the UI thread never waits on them (#1554).
+/// false while jobs hold it, so the UI thread never waits on them (#1554). The browser hashes
+/// serially because its UI crate does not use the native Rayon pool.
 pub fn tile_infos(s: &Surface, parallel: bool) -> Vec<TileInfo> {
     // Hash each distinct allocation once; copy-on-write clones share one.
     let mut by_ptr: HashMap<usize, &Arc<Tile>> = HashMap::new();

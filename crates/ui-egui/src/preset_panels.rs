@@ -219,26 +219,39 @@ pub fn paint_gradient(ui: &egui::Ui, rect: Rect, stops: &[(f32, [f32; 4])]) {
     p.add(mesh);
 }
 
-fn pattern_texture(ctx: &egui::Context, pat: &photocraft_doc::Pattern) -> TextureHandle {
-    cached_texture(ctx, ("pattern", pat.id.clone()), || {
-        let (w, h) = (pat.width.max(1), pat.height.max(1));
-        let fmt = pat.surface.format();
-        let px = pat.surface.read_region(photocraft_geom::Rect::new(0, 0, w as i32, h as i32));
-        let n = fmt.channels();
-        // Tiles smaller than the swatch repeat; larger ones are shown shrunk.
-        const S: u32 = 64;
-        let step = (w.max(h) as f32 / S as f32).max(1.0);
-        let mut img = ColorImage::new([S as usize, S as usize], vec![Color32::TRANSPARENT; (S * S) as usize]);
-        for y in 0..S {
-            for x in 0..S {
-                let sx = ((x as f32 * step) as u32) % w;
-                let sy = ((y as f32 * step) as u32) % h;
-                let i = (sy * w + sx) as usize * n;
-                img.pixels[(y * S + x) as usize] = c32(photocraft_raster::to_rgba(&fmt, &px[i..i + n]));
+fn pattern_thumbnail(pat: &photocraft_doc::Pattern) -> ColorImage {
+    const S: usize = 64;
+    let (w, h) = (pat.width, pat.height);
+    if w == 0 || h == 0 || i32::try_from(w).is_err() || i32::try_from(h).is_err() {
+        return ColorImage::new([S, S], vec![Color32::TRANSPARENT; S * S]);
+    }
+    let fmt = pat.surface.format();
+    let mut px = vec![0.0; fmt.channels()];
+    let mut pixels = Vec::with_capacity(S * S);
+    // Sample the sparse surface directly: even an oversized pattern only needs 4096 pixels.
+    // Smaller tiles repeat; larger ones shrink, without an input-sized intermediate buffer.
+    let span = u64::from(w.max(h)).max(S as u64);
+    for y in 0..S {
+        for x in 0..S {
+            let sx = (x as u64 * span / S as u64) % u64::from(w);
+            let sy = (y as u64 * span / S as u64) % u64::from(h);
+            if let (Ok(sx), Ok(sy)) = (i32::try_from(sx), i32::try_from(sy)) {
+                pat.surface.read_pixel(sx, sy, &mut px);
+                pixels.push(c32(photocraft_raster::to_rgba(&fmt, &px)));
+            } else {
+                pixels.push(Color32::TRANSPARENT);
             }
         }
-        img
-    })
+    }
+    ColorImage::new([S, S], pixels)
+}
+
+pub(crate) fn pattern_texture(ctx: &egui::Context, pat: &photocraft_doc::Pattern) -> TextureHandle {
+    let image = pattern_thumbnail(pat);
+    // Imported documents can reuse a pattern id for different pixels. Hash the bounded thumbnail,
+    // rather than the whole pattern, so its displayed content decides which texture is cached.
+    let key = egui::Id::new(("pattern", &pat.id, pat.width, pat.height, pat.surface.format(), &image.pixels));
+    cached_texture(ctx, key, || image)
 }
 
 /// Photoshop's pattern picker: a swatch of the library pattern `selected` (an id) that opens a grid
@@ -261,22 +274,34 @@ pub(crate) fn pattern_picker(app: &PhotocraftApp, ui: &mut egui::Ui, selected: &
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Patterns")));
     let mut picked = None;
     egui::Popup::menu(&resp).show(|ui| {
-        ui.set_max_width(6.0 * (SWATCH + 4.0));
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-            for p in pats {
-                let (r, cell) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
-                ui.painter().image(pattern_texture(&ctx, p).id(), r, uv, Color32::WHITE);
-                let (w, c) = if p.id == selected { (2.0, t.accent) } else { (1.0, t.field_border) };
-                ui.painter().rect_stroke(r, 0.0, Stroke::new(w, c), egui::StrokeKind::Outside);
-                let cell = cell.on_hover_text(p.display_name());
-                cell.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, p.display_name()));
-                if cell.clicked() {
-                    picked = Some(p.id.clone());
-                    ui.close();
-                }
+        picked = pattern_grid(app, ui, selected);
+    });
+    picked
+}
+
+/// Library grid shared by the standalone picker and paint popups. Drawing it inline avoids
+/// replacing an already-open paint popup with a second memory-backed popup.
+pub(crate) fn pattern_grid(app: &PhotocraftApp, ui: &mut egui::Ui, selected: &str) -> Option<String> {
+    const SWATCH: f32 = 40.0;
+    let t = Tokens::get(ui.ctx());
+    let ctx = ui.ctx().clone();
+    let uv = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
+    let mut picked = None;
+    ui.set_max_width(6.0 * (SWATCH + 4.0));
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+        for p in &app.session.patterns.items {
+            let (r, cell) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
+            ui.painter().image(pattern_texture(&ctx, p).id(), r, uv, Color32::WHITE);
+            let (w, c) = if p.id == selected { (2.0, t.accent) } else { (1.0, t.field_border) };
+            ui.painter().rect_stroke(r, 0.0, Stroke::new(w, c), egui::StrokeKind::Outside);
+            let cell = cell.on_hover_text(p.display_name());
+            cell.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), p.display_name()));
+            if cell.clicked() {
+                picked = Some(p.id.clone());
+                ui.close();
             }
-        });
+        }
     });
     picked.filter(|id| id != selected)
 }
@@ -1248,6 +1273,58 @@ mod tests {
         app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
         app.sync_views();
         (app, ctx)
+    }
+
+    #[test]
+    fn pattern_thumbnail_samples_huge_sparse_patterns_without_materializing_them() {
+        let mut surface = photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::RGBA32F, &[0.25, 0.5, 0.75, 0.2]);
+        surface.write_pixel(0, 0, &[1.0, 0.0, 0.0, 0.5]);
+        let pattern = photocraft_doc::Pattern { id: "huge".into(), name: "Huge".into(), width: 100_000, height: 100_000, surface };
+        let image = pattern_thumbnail(&pattern);
+        assert_eq!(image.size, [64, 64]);
+        assert_eq!(image.pixels.len(), 4096);
+        assert_eq!(image.pixels[0], Color32::from_rgba_unmultiplied(255, 0, 0, 128));
+        assert_eq!(image.pixels[1], Color32::from_rgba_unmultiplied(64, 128, 191, 51));
+        assert_eq!(image.pixels[4095], image.pixels[1]);
+        assert_eq!(pattern.surface.tile_count(), 1);
+    }
+
+    #[test]
+    fn pattern_thumbnail_repeats_small_tiles_and_rejects_unaddressable_dimensions() {
+        let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA16);
+        surface.write_pixel(0, 0, &[1.0, 0.0, 0.0, 0.5]);
+        surface.write_pixel(1, 0, &[0.0, 1.0, 0.0, 1.0]);
+        let mut pattern = photocraft_doc::Pattern { id: "repeat".into(), name: "Repeat".into(), width: 2, height: 1, surface };
+        let image = pattern_thumbnail(&pattern);
+        for row in image.pixels.as_chunks::<64>().0 {
+            for pair in row.as_chunks::<2>().0 {
+                assert_eq!(pair, &[Color32::from_rgba_unmultiplied(255, 0, 0, 128), Color32::GREEN]);
+            }
+        }
+        for (w, h) in [(0, 1), (1, 0), (u32::MAX, 1), (1, u32::MAX)] {
+            (pattern.width, pattern.height) = (w, h);
+            let image = pattern_thumbnail(&pattern);
+            assert_eq!(image.pixels.len(), 4096);
+            assert!(image.pixels.iter().all(|p| *p == Color32::TRANSPARENT));
+        }
+    }
+
+    #[test]
+    fn pattern_thumbnail_cache_distinguishes_same_id_with_different_pixels() {
+        let ctx = egui::Context::default();
+        let mut pattern = photocraft_doc::Pattern {
+            id: "shared-id".into(),
+            name: "Shared".into(),
+            width: 2,
+            height: 2,
+            surface: photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::RGBA8, &[1.0, 0.0, 0.0, 1.0]),
+        };
+        let red = pattern_texture(&ctx, &pattern);
+        assert_eq!(pattern_texture(&ctx, &pattern).id(), red.id());
+        pattern.surface = photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::RGBA8, &[0.0, 1.0, 0.0, 1.0]);
+        let green = pattern_texture(&ctx, &pattern);
+        assert_ne!(green.id(), red.id());
+        assert_eq!(pattern_texture(&ctx, &pattern).id(), green.id());
     }
 
     #[test]

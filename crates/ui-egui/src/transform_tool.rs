@@ -9,6 +9,7 @@
 //! cancels. Undo and Redo step through the session's own changes (`Steps`), not the document's
 //! history.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use egui::{Color32, CursorIcon, Pos2, Stroke, pos2, vec2};
@@ -86,11 +87,38 @@ pub struct TransformPreview {
     /// A layer's session keeps `doc` and `opacity` up to date with edits made while the box is
     /// open ([`follow_edits`]); `None` for a lone mask or channel and Transform Selection.
     follow: Option<Follow>,
+    /// Shapes composite in their original stack position rather than above other layers (#2567).
+    shape: Option<ShapePreview>,
     /// The commit running as a background job (#1015): the moving pixels stay on screen, without
     /// the box, until it lands; Esc cancels it. The session ends with the job.
     committing: Option<JobId>,
     /// Content-Aware Scale's live preview (cas_transform.rs).
     pub(crate) content_aware: Option<crate::cas_transform::Live>,
+}
+
+struct ShapePreview {
+    context: egui::Context,
+    max_side: usize,
+    revision: u64,
+    affine: Option<photocraft_geom::Affine>,
+    quad: [[f64; 2]; 4],
+    interpolation: String,
+    active: bool,
+    key: u64,
+    original_area: photocraft_geom::Rect,
+    areas: VecDeque<(u64, photocraft_geom::Rect)>,
+    proxy: Option<ShapeProxy>,
+}
+
+struct ShapeProxy {
+    k: u32,
+    base: Arc<Document>,
+    doc: Arc<Document>,
+    region: photocraft_geom::Rect,
+    drawn: Option<u64>,
+    texture: Option<(u64, u64, egui::TextureHandle)>,
+    patterns: Arc<photocraft_vector::pattern::ShapePatterns>,
+    mask: Option<Arc<photocraft_engine::transform_cmds::PreparedShapeMask>>,
 }
 
 /// What [`follow_edits`] needs to rebuild the preview document.
@@ -187,6 +215,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     }
     let id = st.active_layer.ok_or("no active layer")?;
     let layer = doc.layer(id).ok_or("no layer")?;
+    let shape = matches!(layer.content, LayerContent::Shape(_));
     if photocraft_engine::transform_cmds::locked_for_transform(&doc, id) {
         // Photoshop refuses before the box opens rather than when it is committed (#2585).
         app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": tl!(LOCKED)}).as_object().cloned().unwrap_or_default());
@@ -217,20 +246,24 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     }
     // egui reports the renderer's limit in the app; offscreen harnesses only through the device.
     let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
-    // The layers covering the moving pixels draw over them instead of under them.
-    let above = Above::new(ctx, format!("transform-{session}-above"), &doc, id, max_side);
-    above.hide_in(&mut pd.layers);
-    // A style is drawn again from the pixels as the box moves them, so they are read without it.
-    // Not for the selected part of a layer: its style belongs to that part and the rest together.
-    let styled = lifted.is_none() && photocraft_compose::effects::has_effects(layer);
-    let (image, uv) = preview_image(&doc, id, lifted.as_ref(), b, max_side, styled);
+    let styled = !shape && lifted.is_none() && photocraft_compose::effects::has_effects(layer);
+    let (image, uv, above) = if shape {
+        pd = (*doc).clone();
+        (egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]), [1.0, 1.0], None)
+    } else {
+        // The layers covering the moving pixels draw over them instead of under them.
+        let above = Above::new(ctx, format!("transform-{session}-above"), &doc, id, max_side);
+        above.hide_in(&mut pd.layers);
+        let (image, uv) = preview_image(&doc, id, lifted.as_ref(), b, max_side, styled);
+        (image, uv, Some(above))
+    };
     let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
     app.transform_preview = Some(TransformPreview {
         session,
         doc: Arc::new(pd),
         texture,
         opacity: layer.opacity * layer.fill_opacity,
-        above: Some(above),
+        above,
         styled: styled.then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
         follow: Some(Follow { revision, hidden: lifted.is_none() }),
         committing: None,
@@ -243,6 +276,20 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         steps: Steps::default(),
         tool: app.ui.tool,
         path: None,
+        shape: shape.then(|| ShapePreview {
+            context: ctx.clone(),
+            max_side,
+            revision,
+            affine: Some(photocraft_geom::Affine::IDENTITY),
+            quad: corners(rect),
+            interpolation: "bicubic".into(),
+            active: true,
+            key: (1 << 40) + session,
+            // Shapes move whole despite a selection; invalidate their entire old surface.
+            original_area: layer.surface().map_or(photocraft_geom::Rect::EMPTY, |s| s.tile_bounds()),
+            areas: VecDeque::from([((1 << 40) + session, layer.surface().map_or(photocraft_geom::Rect::EMPTY, |s| s.tile_bounds()))]),
+            proxy: None,
+        }),
         content_aware: None,
     });
     app.ui.transform = Some(TransformSession {
@@ -344,6 +391,7 @@ pub(crate) fn begin_content_aware(
         tool: app.ui.tool,
         path: None,
         content_aware: Some(live),
+        shape: None,
         styled: None,
     });
     app.ui.transform = Some(TransformSession {
@@ -455,6 +503,7 @@ fn begin_lone(
         above: None,
         styled: None,
         follow: None,
+        shape: None,
         committing: None,
         gesture: None,
         warp_drag: None,
@@ -518,6 +567,7 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
         content_aware: None,
         above: None,
         follow: None,
+        shape: None,
         committing: None,
     });
     app.ui.transform = Some(TransformSession {
@@ -593,6 +643,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         above: None,
         styled: None,
         follow: None,
+        shape: None,
         committing: None,
         gesture: None,
         warp_drag: None,
@@ -1141,6 +1192,10 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
 /// rebuilt from the current one. The moving pixels keep the session's. Called before the canvas
 /// reads the preview, so it never caches a revision with the old preview.
 pub fn follow_edits(app: &mut PhotocraftApp) {
+    if app.transform_preview.as_ref().is_some_and(|pv| pv.shape.is_some()) {
+        follow_shape(app);
+        return;
+    }
     let (Some(t), Some(pv)) = (&app.ui.transform, app.transform_preview.as_mut()) else { return };
     let Some(follow) = pv.follow.as_mut() else { return };
     let Some(st) = app.session.active().filter(|st| st.doc.id == pv.doc.id && st.revision != follow.revision) else { return };
@@ -1158,6 +1213,322 @@ pub fn follow_edits(app: &mut PhotocraftApp) {
     pv.opacity = if live.visible { live.opacity * live.fill_opacity } else { 0.0 };
     follow.revision = st.revision;
     pv.doc = Arc::new(pd);
+}
+
+fn follow_shape(app: &mut PhotocraftApp) {
+    if follow_shape_proxy(app) {
+        return;
+    }
+    let (Some(t), Some(pv)) = (&app.ui.transform, app.transform_preview.as_ref()) else { return };
+    let Some(shape) = &pv.shape else { return };
+    let Some(st) = app.session.active().filter(|st| st.doc.id == pv.doc.id) else { return };
+    let affine = t.warp.is_none().then(|| rect_to_quad_affine(t.rect, t.quad)).flatten();
+    if shape.proxy.is_none() && shape.revision == st.revision && shape.affine == affine && shape.quad == t.quad && shape.interpolation == t.interpolation {
+        return;
+    }
+    let (source, revision, id) = (st.doc.clone(), st.revision, LayerId(t.layer));
+    let quad = t.quad;
+    let Some(layer) = source.layer(id) else { return };
+    let original_area = layer.surface().map_or(photocraft_geom::Rect::EMPTY, |s| s.tile_bounds());
+    let started = crate::gpu_canvas::now_ms();
+    let shown = if t.warp.is_none() {
+        let result = match affine {
+            Some(a) => photocraft_engine::transform_cmds::preview_shape_transform(&source, id, a, &t.interpolation),
+            None => photocraft_engine::transform_cmds::preview_shape_quad_transform(&source, id, t.rect, quad, &t.interpolation),
+        };
+        match result {
+            Ok(shown) => Some(shown),
+            Err(e) => {
+                log::warn!("Shape transform preview: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let active = shown.is_some();
+    let area = shown.as_ref().and_then(|d| d.layer(id)?.surface()).map_or(source.bounds(), |s| s.tile_bounds());
+    let mut shown = shown.unwrap_or_else(|| {
+        let mut hidden = (*source).clone();
+        if let Some(layer) = hidden.layer_mut(id) {
+            layer.visible = false;
+        }
+        hidden
+    });
+    shown = photocraft_engine::mode_cmds::display_document(&shown).unwrap_or(shown);
+    let key = (1 << 40) | (app.ui.alloc_id() & ((1 << 40) - 1));
+    let Some(pv) = app.transform_preview.as_mut() else { return };
+    let Some(shape) = pv.shape.as_mut() else { return };
+    if !active && (shape.active || shape.revision != revision) {
+        let b = photocraft_engine::transform_cmds::transform_bounds(&source, layer);
+        // Warp or a rejected quad retains the existing texture preview.
+        let (image, uv) = preview_image(&source, id, None, b, shape.max_side, false);
+        pv.texture = crate::transform_tex::PreviewTextures::new(&shape.context, format!("transform-{}", pv.session), image, uv);
+    }
+    if shape.revision != revision {
+        shape.areas.clear();
+    }
+    shape.revision = revision;
+    shape.affine = affine;
+    shape.quad = quad;
+    shape.interpolation = app.ui.transform.as_ref().map_or_else(String::new, |t| t.interpolation.clone());
+    shape.active = active;
+    shape.proxy = None;
+    shape.key = key;
+    shape.original_area = original_area;
+    if shape.areas.len() >= 128 {
+        shape.areas.pop_front();
+    }
+    shape.areas.push_back((key, area));
+    pv.doc = Arc::new(shown);
+    pv.opacity = if layer.visible { layer.opacity * layer.fill_opacity } else { 0.0 };
+    app.perf.span("shape transform preview", crate::gpu_canvas::now_ms() - started);
+}
+
+pub(crate) fn display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
+    let (t, pv) = (app.ui.transform.as_ref()?, app.transform_preview.as_ref()?);
+    let st = app.session.documents().get(idx)?;
+    if app.session.active_index() != Some(idx) || st.doc.id != pv.doc.id || st.doc.layer(LayerId(t.layer)).is_none() {
+        return None;
+    }
+    Some((pv.doc.clone(), pv.shape.as_ref().map_or((1 << 40) + pv.session, |p| p.key)))
+}
+
+/// Shape transforms keep a reduced document in the normal layer stack. Only the moving
+/// shape and its linked pixel mask change; the other surfaces share the session's proxy.
+fn follow_shape_proxy(app: &mut PhotocraftApp) -> bool {
+    use photocraft_geom::{Affine, Rect};
+    let (Some(t), Some(pv), Some(st)) = (&app.ui.transform, &app.transform_preview, app.session.active()) else { return false };
+    if st.doc.id != pv.doc.id {
+        return false;
+    }
+    let Some(shape) = &pv.shape else { return false };
+    let source = st.doc.clone();
+    let k = crate::proxy::factor(&source).max(source.size.width.max(source.size.height).div_ceil(2048));
+    if !crate::proxy::reduced_previews(app)
+        || app.ui.view.pattern_preview
+        || source.has_artboards()
+        || !photocraft_compose::proxy::proxy_faithful(&source)
+        || app.ui.windows.iter().any(|w| w.open && Some(w.document) == app.session.active_index())
+        || source.walk().iter().any(|(_, _, l)| matches!(&l.content, LayerContent::Fill(photocraft_doc::Fill::Pattern { .. })))
+    {
+        return false;
+    }
+    // Stroke clipping splits fill and stroke from metadata in document coordinates.
+    // Its exact preview (and effects/vector masks) retains the full-resolution route.
+    if source.walk().iter().any(|(_, _, l)| l.clipped)
+        && source.walk().iter().any(|(_, _, l)| matches!(&l.content, LayerContent::Shape(s) if s.stroke.is_some()))
+    {
+        return false;
+    }
+    let Some(affine) = t.warp.is_none().then(|| rect_to_quad_affine(t.rect, t.quad)).flatten() else { return false };
+    let (revision, id, interpolation, quad) = (st.revision, LayerId(t.layer), t.interpolation.clone(), t.quad);
+    let Some(LayerContent::Shape(original)) = source.layer(id).map(|l| &l.content) else { return false };
+    let q = k as f64;
+    let scaled_bounds = Rect::new(0, 0, source.size.width.div_ceil(k) as i32, source.size.height.div_ceil(k) as i32);
+    let view = ViewXform::active(app);
+    if view.is_some_and(|xf| {
+        !xf.zoom.is_finite()
+            || xf.zoom <= 0.0
+            || !xf.rotation.is_finite()
+            || !xf.center.iter().all(|v| v.is_finite())
+            || ![xf.rect.min.x, xf.rect.min.y, xf.rect.max.x, xf.rect.max.y].iter().all(|v| v.is_finite())
+    }) {
+        return false;
+    }
+    let region = view.filter(|xf| xf.rect.is_positive()).map_or(scaled_bounds, |xf| {
+        let corners = [xf.rect.min, pos2(xf.rect.max.x, xf.rect.min.y), xf.rect.max, pos2(xf.rect.min.x, xf.rect.max.y)].map(|p| xf.to_doc(p));
+        if corners.iter().any(|p| p.iter().any(|v| !v.is_finite())) {
+            // A finite but tiny zoom can overflow the screen-space inverse in f32.
+            return scaled_bounds;
+        }
+        let edge = |axis: usize, min: bool| {
+            let v = corners.iter().map(|p| p[axis]).fold(if min { f64::INFINITY } else { f64::NEG_INFINITY }, |a, b| if min { a.min(b) } else { a.max(b) });
+            let v = (v / q).clamp(-1e9, 1e9);
+            if min { v.floor() as i32 } else { v.ceil() as i32 }
+        };
+        Rect::new(edge(0, true), edge(1, true), edge(0, false), edge(1, false)).inflate(2).intersect(&scaled_bounds)
+    });
+    let fresh = shape.revision != revision || shape.proxy.as_ref().is_none_or(|p| p.k != k);
+    if !fresh && shape.affine == Some(affine) && shape.interpolation == interpolation && shape.proxy.as_ref().is_some_and(|p| p.region == region) {
+        return true;
+    }
+    if fresh {
+        if k > 1 {
+            // Proxy downsampling visits source rows even when the tiles are sparse.
+            let unsafe_layer = source.walk().iter().any(|(_, _, l)| {
+                l.mask.as_ref().is_some_and(|m| !shape_proxy_source_bounded(&m.surface, k))
+                    || l.fill_cache.as_ref().is_some_and(|c| !shape_proxy_source_bounded(&c.surface, k))
+                    || l.surface().is_some_and(|s| !shape_proxy_source_bounded(s, k))
+            });
+            if unsafe_layer
+                || source.channels.iter().any(|c| !shape_proxy_source_bounded(&c.surface, k))
+                || source.selection.as_ref().is_some_and(|s| !shape_proxy_source_bounded(s, k))
+            {
+                return false;
+            }
+        } else if source.layer(id).and_then(|l| l.mask.as_ref()).filter(|m| m.linked).is_some_and(|m| !shape_proxy_source_bounded(&m.surface, k)) {
+            // At full scale stationary surfaces share their tiles; only the moving mask
+            // needs a prepared alpha-bearing source.
+            return false;
+        }
+    }
+    let started = crate::gpu_canvas::now_ms();
+    let base = if fresh {
+        let mut base = crate::proxy::proxy_document(&source, k);
+        scale_mask_feather(&mut base.layers, q as f32);
+        // Separate GPU caches from the committed document without changing layer ids.
+        base.id.0 ^= 1 << 58;
+        Arc::new(base)
+    } else {
+        let Some(proxy) = &shape.proxy else { return false };
+        proxy.base.clone()
+    };
+    let [a, b, c, d, e, f] = affine.m;
+    let patterns = if fresh {
+        Arc::new(photocraft_vector::pattern::ShapePatterns::new(original, &source.patterns, source.mode))
+    } else {
+        let Some(proxy) = &shape.proxy else { return false };
+        proxy.patterns.clone()
+    };
+    let mask = if fresh {
+        match base.layer(id).and_then(|l| l.mask.as_ref()).filter(|m| m.linked) {
+            Some(mask) => match photocraft_engine::transform_cmds::PreparedShapeMask::new(&mask.surface) {
+                Ok(prepared) => Some(Arc::new(prepared)),
+                Err(_) => return false,
+            },
+            None => None,
+        }
+    } else {
+        let Some(proxy) = &shape.proxy else { return false };
+        proxy.mask.clone()
+    };
+    let sigma =
+        base.layer(id).and_then(|l| l.mask.as_ref()).filter(|m| m.enabled && m.linked).map_or(0.0, |m| photocraft_compose::masks::feather_sigma(m.feather));
+    let reach = if sigma > 0.0 { (3.0 * sigma + 2.0).ceil().min(2048.0) as i32 } else { 0 };
+    let mask_clip = region.inflate(reach).intersect(&base.bounds());
+    let proxy_affine = Affine { m: [a, b, c, d, e / q, f / q] };
+    let Ok(mut shown) =
+        photocraft_engine::transform_cmds::preview_shape_transform_geometry_clipped(&base, id, proxy_affine, &interpolation, mask_clip, mask.as_deref())
+    else {
+        return false;
+    };
+    // Transform only the original vector metadata here: never warp an original-size mask.
+    let mut geometry = original.clone();
+    photocraft_engine::vector_cmds::transform_shape(&mut geometry, &affine);
+    let scale = Affine { m: [1.0 / q, 0.0, 0.0, 1.0 / q, 0.0, 0.0] };
+    let Some(compiled) = photocraft_vector::CompiledShape::preview_prepared(
+        &geometry,
+        photocraft_vector::DEFAULT_TOLERANCE,
+        source.bounds(),
+        &source.patterns,
+        source.mode,
+        scale,
+        &patterns,
+    ) else {
+        return false;
+    };
+    let cache = compiled.render(source.pixel_format(), region);
+    geometry.path = geometry.path.transform(&scale);
+    if let Some(stroke) = &mut geometry.stroke {
+        stroke.width /= k as f32;
+    }
+    geometry.cache = Some(cache);
+    if let Some(layer) = shown.layer_mut(id) {
+        layer.content = LayerContent::Shape(geometry);
+    }
+    shown = photocraft_engine::mode_cmds::display_document(&shown).unwrap_or(shown);
+    let key = (1 << 40) | (app.ui.alloc_id() & ((1 << 40) - 1));
+    let Some(pv) = &mut app.transform_preview else { return false };
+    let Some(shape) = &mut pv.shape else { return false };
+    let (drawn, texture) = if fresh { (None, None) } else { shape.proxy.take().map_or((None, None), |p| (p.drawn, p.texture)) };
+    shape.proxy = Some(ShapeProxy { k, base, doc: Arc::new(shown), region, drawn, texture, patterns, mask });
+    shape.revision = revision;
+    shape.affine = Some(affine);
+    shape.quad = quad;
+    shape.interpolation = interpolation;
+    shape.active = true;
+    shape.key = key;
+    // Canvas geometry, channels and transform handles remain in original document space.
+    pv.doc = source;
+    app.perf.span("shape transform preview", crate::gpu_canvas::now_ms() - started);
+    true
+}
+
+fn shape_proxy_source_bounded(surface: &photocraft_raster::Surface, k: u32) -> bool {
+    let bounds = surface.content_bounds();
+    if bounds.is_empty() {
+        return true;
+    }
+    let divisor = i64::from(k.clamp(1, 1 << 20));
+    let ceil = |v: i32| {
+        let v = i64::from(v);
+        v.div_euclid(divisor) + i64::from(v.rem_euclid(divisor) != 0)
+    };
+    let (x0, x1, y0, y1) = (i64::from(bounds.x0).div_euclid(divisor), ceil(bounds.x1), i64::from(bounds.y0).div_euclid(divisor), ceil(bounds.y1));
+    let (width, height) = ((x1 - x0).max(0) as u64, (y1 - y0).max(0) as u64);
+    if width > 2048 || height > 2048 || [x0, x1, y0, y1].iter().any(|edge| i32::try_from(edge * divisor).is_err()) {
+        return false;
+    }
+    let row_pixels = width * divisor as u64;
+    row_pixels.saturating_mul(surface.format().bytes_per_pixel() as u64) <= 64 * 1024 * 1024 && row_pixels.saturating_mul(height) <= 64 * 1024 * 1024
+}
+
+fn scale_mask_feather(layers: &mut [photocraft_doc::Layer], k: f32) {
+    for l in layers {
+        if let Some(m) = &mut l.mask {
+            m.feather = photocraft_compose::masks::feather_sigma(m.feather) / k;
+        }
+        if let LayerContent::Group(g) = &mut l.content {
+            scale_mask_feather(&mut g.children, k);
+        }
+    }
+}
+
+pub(crate) struct ShapeProxyFrame {
+    pub k: u32,
+    pub doc: Arc<Document>,
+    pub region: photocraft_geom::Rect,
+    pub key: u64,
+    pub stale: bool,
+}
+
+pub(crate) fn shape_proxy(app: &PhotocraftApp, idx: usize) -> Option<ShapeProxyFrame> {
+    if app.session.active_index() != Some(idx) {
+        return None;
+    }
+    let pv = app.transform_preview.as_ref()?;
+    if app.session.documents().get(idx)?.doc.id != pv.doc.id {
+        return None;
+    }
+    let shape = pv.shape.as_ref()?;
+    let p = shape.proxy.as_ref()?;
+    Some(ShapeProxyFrame { k: p.k, doc: p.doc.clone(), region: p.region, key: shape.key, stale: p.drawn != Some(shape.key) })
+}
+
+pub(crate) fn shape_proxy_drawn(app: &mut PhotocraftApp, key: u64) {
+    if let Some(p) = app.transform_preview.as_mut().and_then(|p| p.shape.as_mut()).and_then(|p| p.proxy.as_mut()) {
+        p.drawn = Some(key);
+    }
+}
+
+pub(crate) fn shape_proxy_texture(app: &PhotocraftApp, key: u64, display: u64) -> Option<egui::TextureId> {
+    let p = app.transform_preview.as_ref()?.shape.as_ref()?.proxy.as_ref()?;
+    let (k, d, texture) = p.texture.as_ref()?;
+    (*k == key && *d == display).then(|| texture.id())
+}
+
+pub(crate) fn set_shape_proxy_texture(app: &mut PhotocraftApp, key: u64, display: u64, texture: egui::TextureHandle) {
+    if let Some(p) = app.transform_preview.as_mut().and_then(|p| p.shape.as_mut()).and_then(|p| p.proxy.as_mut()) {
+        p.texture = Some((key, display, texture));
+    }
+}
+
+pub(crate) fn damage(app: &PhotocraftApp, document: DocId, revision: u64, before: u64, after: u64) -> Option<photocraft_geom::Rect> {
+    let pv = app.transform_preview.as_ref().filter(|p| p.doc.id == document)?;
+    let shape = pv.shape.as_ref().filter(|p| p.revision == revision)?;
+    let area = |key| if key == 0 { Some(shape.original_area) } else { shape.areas.iter().find(|(k, _)| *k == key).map(|(_, r)| *r) };
+    Some(area(before)?.union(&area(after)?))
 }
 
 pub fn cancel(app: &mut PhotocraftApp) {
@@ -1968,7 +2339,9 @@ fn rotation_degrees(quad: [[f64; 2]; 4]) -> f64 {
 /// just outside a corner, or anywhere while a rotate drag is on. It points into the box along the
 /// bisector of the nearest corner, so each corner gets its own arrow and they turn with the box.
 pub(crate) fn rotate_cursor_dir(app: &PhotocraftApp, p: [f64; 2]) -> Option<[f64; 2]> {
-    rotate_dir(app.ui.transform.as_ref()?, app.transform_preview.as_ref(), p, handle_tolerance(app))
+    let shown = shown_shape_transform(app);
+    let t = shown.as_ref().or(app.ui.transform.as_ref())?;
+    rotate_dir(t, app.transform_preview.as_ref(), p, handle_tolerance(app))
 }
 
 fn rotate_dir(t: &TransformSession, pv: Option<&TransformPreview>, p: [f64; 2], tol: f64) -> Option<[f64; 2]> {
@@ -2022,7 +2395,7 @@ pub fn cursor(app: &PhotocraftApp, p: [f64; 2], quick_split: bool) -> Option<Cur
         return Some(CursorIcon::Default);
     }
     if rotate_cursor_dir(app, p).is_some() {
-        // The overlay draws the curved rotate arrow (`rotate_cursor_dir`), also during the drag.
+        // The canvas draws the curved rotate arrow (`rotate_cursor_dir`), also during the drag.
         return Some(CursorIcon::None);
     }
     Some(match h {
@@ -2034,6 +2407,16 @@ pub fn cursor(app: &PhotocraftApp, p: [f64; 2], quick_split: bool) -> Option<Cur
         Hit::Inside => CursorIcon::Move,
         Hit::Outside => CursorIcon::Alias,
     })
+}
+
+/// Control geometry of a shape image drawn before this frame's later pointer events.
+pub(crate) fn shown_shape_transform(app: &PhotocraftApp) -> Option<TransformSession> {
+    let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return None };
+    let shape = pv.shape.as_ref().filter(|s| s.active && t.warp.is_none() && s.quad != t.quad)?;
+    let mut shown = t.clone();
+    shown.pivot = carry_pivot(t.quad, shape.quad, t.pivot);
+    shown.quad = shape.quad;
+    Some(shown)
 }
 
 /// For each vertex of the preview's `n` × `n` grid over the unit square (row by row), whether it
@@ -2048,6 +2431,8 @@ fn front_vertices(h: &Homography, n: usize) -> Vec<bool> {
 /// Warped preview of the moving pixels plus the box, handles and reference point.
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return };
+    let shown = shown_shape_transform(app);
+    let t = shown.as_ref().unwrap_or(t);
     let scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     if let Some(w) = &t.warp {
         let over_canvas = painter.ctx().input(|i| i.pointer.hover_pos()).filter(|p| xf.rect.contains(*p)).map(|p| xf.to_doc(p));
@@ -2057,7 +2442,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             let tool = pv.split_tool.or_else(|| (alt || pv.split_quick).then(|| quick_split_kind(&w.to_mesh(1, 1), w.bounds, p)));
             tool.map(|tool| (tool, p))
         });
-        draw_warp(painter, xf, t, w, pv, guide);
+        draw_warp(app, painter, xf, t, w, pv, guide);
         return;
     }
     let ctx = painter.ctx();
@@ -2070,7 +2455,9 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         mesh.add_triangle(0, 1, 2);
         mesh.add_triangle(0, 2, 3);
         painter.add(clip_to_canvas(mesh, canvas_size(pv), |p| xf.to_screen(p.x, p.y)));
-    } else if let Some(h) = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], t.quad) {
+    } else if !pv.shape.as_ref().is_some_and(|p| p.active)
+        && let Some(h) = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], t.quad)
+    {
         // A 24×24 grid keeps perspective previews straight.
         let n = 24;
         let zoom = xf.zoom * painter.ctx().pixels_per_point();
@@ -2118,6 +2505,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
                 xf.to_screen(x as f32, y as f32)
             },
             accent,
+            crate::shape_modes::path_display(app, painter.ctx()).1,
         );
     }
     let pts: Vec<Pos2> = t.quad.iter().map(|q| scr(*q)).collect();
@@ -2135,14 +2523,6 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     painter.line_segment([c - vec2(8.0, 0.0), c + vec2(8.0, 0.0)], Stroke::new(1.0, Color32::WHITE));
     painter.line_segment([c - vec2(0.0, 8.0), c + vec2(0.0, 8.0)], Stroke::new(1.0, Color32::WHITE));
     if let Some(at) = painter.ctx().pointer_hover_pos().filter(|p| xf.rect.contains(*p)) {
-        let p = xf.to_doc(at);
-        let tol = HANDLE_PX / f64::from(xf.zoom.max(0.01));
-        if let Some(k) = rotate_dir(t, Some(pv), p, tol) {
-            // Through the view, so the arc bends round the corner as it shows under a turned or
-            // flipped view.
-            let toward = xf.to_screen((p[0] + k[0] * 16.0) as f32, (p[1] + k[1] * 16.0) as f32) - at;
-            crate::crop_ui::draw_turn_cursor(painter.ctx(), at, toward);
-        }
         // Preferences › Tools › Show Transformation Values off hides it, as in Photoshop (#204).
         if let Some(r) = live_readout(app).filter(|_| app.session.prefs().tools.show_transformation_values) {
             draw_live_readout(painter.ctx(), at, r);
@@ -2335,7 +2715,15 @@ fn draw_warp_points(painter: &egui::Painter, m: &BezierMesh, scr: impl Fn([f64; 
     }
 }
 
-fn draw_warp(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &Warp, pv: &TransformPreview, guide: Option<(SplitTool, [f64; 2])>) {
+fn draw_warp(
+    app: &PhotocraftApp,
+    painter: &egui::Painter,
+    xf: &ViewXform,
+    t: &TransformSession,
+    w: &Warp,
+    pv: &TransformPreview,
+    guide: Option<(SplitTool, [f64; 2])>,
+) {
     let scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     let r = t.rect;
     let m = w.to_mesh(1, 1);
@@ -2367,6 +2755,7 @@ fn draw_warp(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &
                 xf.to_screen(x as f32, y as f32)
             },
             accent,
+            crate::shape_modes::path_display(app, painter.ctx()).1,
         );
     }
     let line = Stroke::new(1.0, accent);
@@ -2950,6 +3339,10 @@ fn rotate_about_pivot(app: &mut PhotocraftApp, da: f64) {
         [c[0] + x * cs - y * sn, c[1] + x * sn + y * cs]
     });
 }
+
+#[cfg(test)]
+#[path = "shape_transform_tests.rs"]
+mod shape_transform_tests;
 
 #[cfg(test)]
 mod tests {

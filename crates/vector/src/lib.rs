@@ -19,17 +19,19 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod components;
 pub mod edit;
 pub mod flatten;
 pub mod map;
+pub mod pattern;
 pub mod raster;
 pub mod shapes;
 pub mod stroke;
 pub mod trace;
 
 use photocraft_color::{ColorMode, PixelFormat};
-use photocraft_doc::{Fill, FillRule, GradientStyle, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, VectorMask};
-use photocraft_geom::{Rect, TILE_SIZE};
+use photocraft_doc::{Fill, FillRule, GradientStyle, Path, PathOp, Pattern, ShapeLayer, ShapeStroke, StrokeAlign, VectorMask};
+use photocraft_geom::{Affine, Rect, TILE_SIZE};
 use photocraft_raster::Surface;
 
 pub use flatten::{Polyline, flatten_path, flatten_subpath};
@@ -231,6 +233,10 @@ pub enum Paint {
     None,
     /// Straight RGBA.
     Solid([f32; 4]),
+    Pattern {
+        tile: std::sync::Arc<pattern::Tile>,
+        placement: pattern::Placement,
+    },
     Gradient {
         /// Colour stops sorted by location (straight RGBA).
         stops: Vec<(f32, [f32; 4])>,
@@ -255,9 +261,24 @@ impl Paint {
     /// gradient field is honoured (midpoints, opacity stops, centre offset, dither, unsorted
     /// stops), rendering the same pixels as the compositor's fill layers; the parity tests in
     /// `photocraft-compose` (which this crate cannot depend on) keep the two in step. Pattern
-    /// fills are not rendered (transparent): they need the document's pattern table, which
-    /// lives above this crate.
+    /// paints need [`Paint::from_fill_with_patterns`] and the document's pattern table.
     pub fn from_fill(f: &Fill, bounds: (f64, f64, f64, f64), canvas: (f64, f64, f64, f64)) -> Paint {
+        Self::from_fill_with_patterns(f, bounds, canvas, &[], ColorMode::Rgb)
+    }
+
+    /// Resolves pattern ids/names and samples them in the document's colour mode.
+    pub fn from_fill_with_patterns(f: &Fill, bounds: (f64, f64, f64, f64), canvas: (f64, f64, f64, f64), patterns: &[Pattern], mode: ColorMode) -> Paint {
+        Self::from_fill_prepared(f, bounds, canvas, patterns, mode, None)
+    }
+
+    fn from_fill_prepared(
+        f: &Fill,
+        bounds: (f64, f64, f64, f64),
+        canvas: (f64, f64, f64, f64),
+        patterns: &[Pattern],
+        mode: ColorMode,
+        prepared: Option<&pattern::ShapePatterns>,
+    ) -> Paint {
         let rgba = |c: &photocraft_color::Color| {
             let v = c.to_rgb();
             [v[0], v[1], v[2], c.alpha]
@@ -283,7 +304,15 @@ impl Paint {
                     frame,
                 }
             }
-            Fill::Pattern { .. } => Paint::None,
+            Fill::Pattern { id, name, scale, angle, phase, link } => {
+                let tile = prepared
+                    .filter(|p| p.in_mode(mode))
+                    .and_then(|p| p.get(id, name))
+                    .or_else(|| photocraft_doc::pattern::find(patterns, id, name).and_then(|p| pattern::Tile::new_in(p, mode)).map(std::sync::Arc::new));
+                let Some(tile) = tile else { return Paint::None };
+                let anchor = (bounds.0.floor(), bounds.1.floor());
+                Paint::Pattern { tile, placement: pattern::Placement::anchored(anchor, *link, *phase, *scale, *angle) }
+            }
         }
     }
 
@@ -292,6 +321,10 @@ impl Paint {
         match self {
             Paint::None => [0.0; 4],
             Paint::Solid(c) => *c,
+            Paint::Pattern { tile, placement } => {
+                let (u, v) = placement.map(x, y);
+                tile.sample(u, v)
+            }
             Paint::Gradient { stops, midpoints, opacity_stops, style, layout, reverse, dither: dith, frame } => {
                 let t = gradient_t(*style, layout.0, layout.1, *reverse, layout.2, *frame, x, y);
                 let mut c = sample_stops(stops, midpoints, opacity_stops, t);
@@ -463,19 +496,83 @@ pub struct CompiledShape {
     /// Fill area used to clip inside/outside strokes.
     align: Option<(Rasterizer, bool)>,
     bounds: Option<Rect>,
+    /// Proxy previews rasterize scaled geometry but sample paint in document coordinates.
+    paint_to_doc: Option<Affine>,
 }
 
 impl CompiledShape {
     /// Compiles the shape at flattening tolerance `tol`. `canvas` is the frame gradients
     /// without "Align with layer" are laid out in.
     pub fn new(shape: &ShapeLayer, tol: f64, canvas: Rect) -> Self {
-        let pb = shape.path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0));
+        Self::with_patterns(shape, tol, canvas, &[], ColorMode::Rgb)
+    }
+
+    /// Compiles both paints against the document's embedded pattern table.
+    pub fn with_patterns(shape: &ShapeLayer, tol: f64, canvas: Rect, patterns: &[Pattern], mode: ColorMode) -> Self {
+        Self::compile(shape, tol, canvas, patterns, mode, None, None)
+    }
+
+    /// Bounded previews use uniform scale/translation for coverage; paint keeps its original
+    /// document frame, phase and orientation. The caller chooses a small proxy render rectangle.
+    pub fn preview(shape: &ShapeLayer, tol: f64, canvas: Rect, patterns: &[Pattern], mode: ColorMode, doc_to_proxy: Affine) -> Option<Self> {
+        Self::preview_impl(shape, tol, canvas, patterns, mode, doc_to_proxy, None)
+    }
+
+    /// As [`Self::preview`], reusing the source revision's prepared pattern pixels. Only
+    /// coverage and paint placement change when the transform box moves.
+    pub fn preview_prepared(
+        shape: &ShapeLayer,
+        tol: f64,
+        canvas: Rect,
+        patterns: &[Pattern],
+        mode: ColorMode,
+        doc_to_proxy: Affine,
+        prepared: &pattern::ShapePatterns,
+    ) -> Option<Self> {
+        Self::preview_impl(shape, tol, canvas, patterns, mode, doc_to_proxy, Some(prepared))
+    }
+
+    fn preview_impl(
+        shape: &ShapeLayer,
+        tol: f64,
+        canvas: Rect,
+        patterns: &[Pattern],
+        mode: ColorMode,
+        doc_to_proxy: Affine,
+        prepared: Option<&pattern::ShapePatterns>,
+    ) -> Option<Self> {
+        let [a, b, c, d, _, _] = doc_to_proxy.m;
+        if !doc_to_proxy.m.iter().all(|v| v.is_finite()) || a <= 0.0 || a != d || b != 0.0 || c != 0.0 {
+            return None;
+        }
+        let inverse = doc_to_proxy.inverse()?;
+        let mut proxy = shape.clone();
+        proxy.path = proxy.path.transform(&doc_to_proxy);
+        if let Some(stroke) = proxy.stroke.as_mut() {
+            stroke.width *= a as f32;
+        }
+        let paint_bounds = shape.path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let mut compiled = Self::compile(&proxy, tol, canvas, patterns, mode, Some(paint_bounds), prepared);
+        compiled.paint_to_doc = Some(inverse);
+        Some(compiled)
+    }
+
+    fn compile(
+        shape: &ShapeLayer,
+        tol: f64,
+        canvas: Rect,
+        patterns: &[Pattern],
+        mode: ColorMode,
+        paint_bounds: Option<(f64, f64, f64, f64)>,
+        prepared: Option<&pattern::ShapePatterns>,
+    ) -> Self {
+        let pb = paint_bounds.unwrap_or_else(|| shape.path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0)));
         let cb = (f64::from(canvas.x0), f64::from(canvas.y0), f64::from(canvas.x1), f64::from(canvas.y1));
         let area = fill_rasterizer(&shape.path, tol);
         let mut bounds = None;
         let fill = shape.fill.as_ref().map(|f| {
             bounds = area.pixel_bounds();
-            (area.clone(), Paint::from_fill(f, pb, cb))
+            (area.clone(), Paint::from_fill_prepared(f, pb, cb, patterns, mode, prepared))
         });
         let all_closed = shape.path.subpaths.iter().all(|s| s.closed);
         let mut align = None;
@@ -492,12 +589,12 @@ impl CompiledShape {
                 (Some(a), Some(b)) => Some(a.union(&b)),
                 (a, b) => a.or(b),
             };
-            (r, Paint::from_fill(&s.paint, pb, cb), s.opacity.clamp(0.0, 1.0))
+            (r, Paint::from_fill_prepared(&s.paint, pb, cb, patterns, mode, prepared), s.opacity.clamp(0.0, 1.0))
         });
         if shape.path.inverted && shape.fill.is_some() {
             bounds = Some(Rect::new(i32::MIN / 4, i32::MIN / 4, i32::MAX / 4, i32::MAX / 4));
         }
-        CompiledShape { fill, stroke, align, bounds }
+        CompiledShape { fill, stroke, align, bounds, paint_to_doc: None }
     }
 
     /// Pixel bounds of the rendering (`None` = nothing visible).
@@ -515,6 +612,7 @@ impl CompiledShape {
             for (i, (o, c)) in out.iter_mut().zip(&cov).enumerate() {
                 if *c > 0.0 {
                     let (x, y) = ((rect.x0 + (i % w) as i32) as f64 + 0.5, (rect.y0 + (i / w) as i32) as f64 + 0.5);
+                    let (x, y) = self.paint_to_doc.map_or((x, y), |a| (a.m[0] * x + a.m[4], a.m[3] * y + a.m[5]));
                     let mut p = paint.at(x, y);
                     p[3] *= c;
                     *o = p;
@@ -534,6 +632,7 @@ impl CompiledShape {
                     continue;
                 }
                 let (x, y) = ((rect.x0 + (i % w) as i32) as f64 + 0.5, (rect.y0 + (i / w) as i32) as f64 + 0.5);
+                let (x, y) = self.paint_to_doc.map_or((x, y), |a| (a.m[0] * x + a.m[4], a.m[3] * y + a.m[5]));
                 let s = paint.at(x, y);
                 let sa = s[3] * c * opacity;
                 let da = o[3];
@@ -575,6 +674,11 @@ impl CompiledShape {
 /// `clip` — the canvas, which also lays out gradients whose fill is not aligned with the layer.
 pub fn render_shape(shape: &ShapeLayer, format: PixelFormat, clip: Rect) -> Surface {
     CompiledShape::new(shape, DEFAULT_TOLERANCE, clip).render(format, clip)
+}
+
+/// Renders shape fill and stroke using the document's embedded patterns.
+pub fn render_shape_with_patterns(shape: &ShapeLayer, format: PixelFormat, clip: Rect, patterns: &[Pattern]) -> Surface {
+    CompiledShape::with_patterns(shape, DEFAULT_TOLERANCE, clip, patterns, format.mode).render(format, clip)
 }
 
 #[cfg(test)]

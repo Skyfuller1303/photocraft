@@ -3827,6 +3827,33 @@ cameraData	Lens	Lens
 	Reset All Locked Settings	Tüm Kilitli Ayarları Sıfırla
 	Copy Texture to Other Tools	Dokuyu Diğer Araçlara Kopyala
 
+# Shape controls and independent paint palettes.
+	Align Edges	Kenarları Hizala
+	Align to Canvas	Tuvale Hizala
+	Arrowheads	Ok Uçları
+	Bring Shape Forward	Şekli Öne Getir
+	Bring Shape to Front	Şekli En Öne Getir
+	Color opacity	Renk opaklığı
+	Concavity:	İçbükeylik:
+	Distribute Horizontally	Yatay Dağıt
+	Distribute Vertically	Dikey Dağıt
+	End	Son
+	No recent colors	Son kullanılan renk yok
+	Path Alignment	Yol Hizalama
+	Path Arrangement	Yol Düzenleme
+	Path Operations	Yol İşlemleri
+	Path Options	Yol Seçenekleri
+	Proportional	Orantılı
+	Recent Colors	Son Kullanılan Renkler
+	Send Shape Backward	Şekli Arkaya Gönder
+	Send Shape to Back	Şekli En Arkaya Gönder
+	Show Path	Yolu Göster
+	Smooth Indents	Girintileri Yumuşat
+	Start	Başlangıç
+	Stop opacity	Durak opaklığı
+	Unconstrained	Kısıtlamasız
+	Constrain Proportions	Oranları Koru
+
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Eylemleri Yükle…
 	Save Actions…	Eylemleri Kaydet…

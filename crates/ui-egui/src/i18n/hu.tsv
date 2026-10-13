@@ -4016,6 +4016,33 @@ cameraRaw	Yellow	Sárga
 	Reset All Locked Settings	Összes zárolt beállítás visszaállítása
 	Copy Texture to Other Tools	Textúra másolása más eszközökre
 
+# Shape controls and independent paint palettes.
+	Align Edges	Élek igazítása
+	Align to Canvas	Igazítás a vászonhoz
+	Arrowheads	Nyílhegyek
+	Bring Shape Forward	Alakzat előrébb hozása
+	Bring Shape to Front	Alakzat előtérbe hozása
+	Color opacity	Szín átlátszatlansága
+	Concavity:	Homorúság:
+	Distribute Horizontally	Vízszintes elosztás
+	Distribute Vertically	Függőleges elosztás
+	End	Vége
+	No recent colors	Nincsenek legutóbbi színek
+	Path Alignment	Útvonal igazítása
+	Path Arrangement	Útvonal elrendezése
+	Path Operations	Útvonalműveletek
+	Path Options	Útvonal beállításai
+	Proportional	Arányos
+	Recent Colors	Legutóbbi színek
+	Send Shape Backward	Alakzat hátrébb küldése
+	Send Shape to Back	Alakzat háttérbe küldése
+	Show Path	Útvonal megjelenítése
+	Smooth Indents	Bemélyedések simítása
+	Start	Kezdete
+	Stop opacity	Pont átlátszatlansága
+	Unconstrained	Korlátozás nélkül
+	Constrain Proportions	Arányok megtartása
+
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Műveletek betöltése…
 	Save Actions…	Műveletek mentése…

@@ -804,6 +804,23 @@
 	Statistics…	Statistiken…
 	Refine Strokes	Verfeinerungsstriche
 @plural	{n} item|{n} items	{n} Element|{n} Elemente
+
+# Plural status messages (complete catalog coverage)
+@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	{n} Farbfeld nach {file} exportiert|{n} Farbfelder nach {file} exportiert
+@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	{n} Pinsel aus {group} importiert|{n} Pinsel aus {group} importiert
+@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{n} Farbfeld aus {file} importiert|{n} Farbfelder aus {file} importiert
+@plural	Played {n} step|Played {n} steps	{n} Schritt wiedergegeben|{n} Schritte wiedergegeben
+@plural	Saved for Web: {n} file|Saved for Web: {n} files	Für Web gespeichert: {n} Datei|Für Web gespeichert: {n} Dateien
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	{n} verknüpftes Smart-Objekt aktualisiert, das auf dem Datenträger geändert wurde|{n} verknüpfte Smart-Objekte aktualisiert, die auf dem Datenträger geändert wurden
+@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	{n} von dieser Komposition erfasste Ebene wurde gelöscht. Aktualisiere die Komposition oder lösche die Warnung.|{n} von dieser Komposition erfasste Ebenen wurden gelöscht. Aktualisiere die Komposition oder lösche die Warnung.
+@plural	{n} plane|{n} planes	{n} Fläche|{n} Flächen
+@plural	{n} preset|{n} presets	{n} Vorgabe|{n} Vorgaben
+@plural	{n} sample point removed|{n} sample points removed	{n} Messpunkt entfernt|{n} Messpunkte entfernt
+@plural	{n} slice|{n} slices	{n} Slice|{n} Slices
+@plural	{n} step|{n} steps	{n} Schritt|{n} Schritte
+@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} weitere Pinselvorgaben-Warnung)|{warning} (+{n} weitere Pinselvorgaben-Warnungen)
+@plural	{what} with {n} warning|{what} with {n} warnings	{what} mit {n} Warnung|{what} mit {n} Warnungen
+
 	Auto	Automatisch
 	(print to the printer)	(an den Drucker senden)
 	+ Add variable	+ Variable hinzufügen
@@ -1307,6 +1324,7 @@
 	Offset	Versatz
 	Only Web Colors	Nur Webfarben
 	Opacity	Deckkraft
+	Stop opacity	Deckkraft des Verlaufsstopps
 	Opacity Jitter	Deckkraftschwankung
 	Opacity:	Deckkraft:
 	Open a document to define variables.	Öffne ein Dokument, um Variablen zu definieren.
@@ -2607,6 +2625,33 @@ fontWeight	Italic	Kursiv
 	Quick Selection found nothing there	Die Schnellauswahl hat dort nichts gefunden
 	Object Selection found nothing there — try a tighter rectangle	Die Objektauswahl hat dort nichts gefunden — versuchen Sie ein engeres Rechteck
 	No subject found — try a rectangle around the object	Kein Motiv gefunden — versuchen Sie ein Rechteck um das Objekt
+	Align to Canvas	An Leinwand ausrichten
+	Arrowheads	Pfeilspitzen
+	Bring Shape Forward	Form nach vorne
+	Bring Shape to Front	Form in den Vordergrund
+	Constrain Proportions	Proportionen beibehalten
+	Distribute Horizontally	Horizontal verteilen
+	Distribute Vertically	Vertikal verteilen
+	End	Ende
+	New Path	Neuer Pfad
+	Path Alignment	Pfadausrichtung
+	Path Arrangement	Pfadanordnung
+	Path Operations	Pfadoperationen
+	Path Options	Pfadoptionen
+	Send Shape Backward	Form nach hinten
+	Send Shape to Back	Form in den Hintergrund
+	Show Path	Pfad anzeigen
+	Start	Anfang
+	Align Edges	Kanten ausrichten
+	Unconstrained	Unbeschränkt
+	Proportional	Proportional
+	Smooth Indents	Einbuchtungen glätten
+	Concavity:	Einbuchtung:
+	Solid Color	Volltonfarbe
+	Color Picker	Farbwähler
+	Recent Colors	Zuletzt verwendete Farben
+	No recent colors	Noch keine Farben verwendet
+	Color opacity	Farbdeckkraft
 	Click the first point or press {key} to close · {del} removes a point · Esc cancels	Klicke auf den ersten Punkt oder drücke {key} zum Schließen · {del} entfernt einen Punkt · Esc bricht ab
 	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	Klicke und bewege dich entlang einer Kante · Klicken setzt einen Ankerpunkt · {alt}-Klick für ein gerades Segment · Doppelklick schließt
 	Follows only edges this close to the pointer ([ and ] change it)	Folgt nur Kanten so nah am Zeiger ([ und ] ändern den Wert)
@@ -2729,20 +2774,6 @@ curves	Smooth	Glätten
 	The layer or its mask changed. Drag the mask onto the Trash again.	Die Ebene oder ihre Maske hat sich geändert. Ziehen Sie die Maske erneut in den Papierkorb.
 	Delete the vector mask?	Vektormaske löschen?
 # Counted status messages and labels (#3454; adapted from PR #3821)
-@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	{n} Farbfeld nach {file} exportiert|{n} Farbfelder nach {file} exportiert
-@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	{n} Pinsel aus {group} importiert|{n} Pinsel aus {group} importiert
-@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{n} Farbfeld aus {file} importiert|{n} Farbfelder aus {file} importiert
-@plural	Played {n} step|Played {n} steps	{n} Schritt wiedergegeben|{n} Schritte wiedergegeben
-@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	{n} verknüpftes Smart-Objekt aktualisiert, das auf dem Datenträger geändert wurde|{n} verknüpfte Smart-Objekte aktualisiert, die auf dem Datenträger geändert wurden
-@plural	Saved for Web: {n} file|Saved for Web: {n} files	Für Web gespeichert: {n} Datei|Für Web gespeichert: {n} Dateien
-@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	{n} von dieser Komposition erfasste Ebene wurde gelöscht. Aktualisiere die Komposition oder lösche die Warnung.|{n} von dieser Komposition erfasste Ebenen wurden gelöscht. Aktualisiere die Komposition oder lösche die Warnung.
-@plural	{n} plane|{n} planes	{n} Fläche|{n} Flächen
-@plural	{n} preset|{n} presets	{n} Vorgabe|{n} Vorgaben
-@plural	{n} sample point removed|{n} sample points removed	{n} Messpunkt entfernt|{n} Messpunkte entfernt
-@plural	{n} slice|{n} slices	{n} Slice|{n} Slices
-@plural	{n} step|{n} steps	{n} Schritt|{n} Schritte
-@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} weitere Pinselvorgaben-Warnung)|{warning} (+{n} weitere Pinselvorgaben-Warnungen)
-@plural	{what} with {n} warning|{what} with {n} warnings	{what} mit {n} Warnung|{what} mit {n} Warnungen
 # View › Guides › New Guide… › Color
 	Light Blue	Hellblau
 	Light Red	Hellrot

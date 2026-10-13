@@ -1,6 +1,6 @@
 use super::*;
 use egui::accesskit::Role;
-use egui::{Key, Modifiers, PointerButton, Pos2, Rect, Vec2, pos2};
+use egui::{Key, Modifiers, PointerButton, Pos2, Rect, Vec2, pos2, vec2};
 use egui_kittest::{
     Harness,
     kittest::{NodeT, Queryable},

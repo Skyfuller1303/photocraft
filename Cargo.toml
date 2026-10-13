@@ -140,4 +140,3 @@ opt-level = 3
 opt-level = 3
 [profile.wasm-release.package.photocraft-paint]
 opt-level = 3
-

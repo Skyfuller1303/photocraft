@@ -99,6 +99,11 @@ fn size_changing_rotation_preview_is_visible_and_preserves_the_panned_center() {
         setup(&mut h, width, height, zoom, center);
         assert_eq!(photocraft_ui_egui::proxy::factor(&h.state().session.active().unwrap().doc), factor);
         let id = open(&mut h);
+        // The centred dialog hides the rotated image's top corner, biasing the blue
+        // bounding box even when the canvas is correctly centred. Keep it beside the
+        // image; blue() still excludes the dialog and checks the real GPU canvas.
+        h.ctx.data_mut(|m| m.insert_temp(egui::Id::new(("dialog", id)), egui::vec2(800.0, 0.0)));
+        h.run_steps(4);
         let source = blue(&mut h, &format!("{width}x{height}-{degrees}-zero")).0;
         assert!(source > 5_000, "the unrotated blue image must be visible outside the dialog");
         angle(&mut h, id, degrees);

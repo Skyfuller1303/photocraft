@@ -6,14 +6,15 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
 
-use photocraft_color::{PixelFormat, SampleType};
+use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::vector::ShapeLayer;
+use photocraft_doc::{Fill, Pattern};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 
 /// (fill, stroke), last use, and the shape's pixels the stroke was fitted to (kept alive so
 /// their tile addresses, part of the key, can't be reused).
-type Entry = ((Surface, Surface), u64, Option<Surface>);
+type Entry = ((Surface, Surface), u64, Option<Surface>, Vec<Pattern>);
 
 fn cache() -> &'static Mutex<(HashMap<u64, Entry>, u64)> {
     static C: OnceLock<Mutex<(HashMap<u64, Entry>, u64)>> = OnceLock::new();
@@ -48,10 +49,29 @@ pub fn purge_cache() -> usize {
 /// (Photoshop's rendering, `sh.cache`) reach past our fill, the part the fill doesn't explain is
 /// stroke: the stroke follows Photoshop's coverage (psd-tools double-stroke-effects).
 pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surface, Surface)> {
+    split_with_patterns(sh, canvas, depth, &[], ColorMode::Rgb)
+}
+
+/// Splits patterned paints with the same embedded tiles and colour mode as the shape cache.
+pub fn split_with_patterns(sh: &ShapeLayer, canvas: Rect, depth: SampleType, patterns: &[Pattern], mode: ColorMode) -> Option<(Surface, Surface)> {
     sh.stroke.as_ref()?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (canvas.x0, canvas.y0, canvas.x1, canvas.y1).hash(&mut h);
     depth.hash(&mut h);
+    mode.hash(&mut h);
+    let mut used_patterns = Vec::new();
+    for fill in sh.fill.iter().chain(sh.stroke.iter().map(|s| &s.paint)) {
+        if let Fill::Pattern { id, name, .. } = fill
+            && let Some(p) = photocraft_doc::pattern::find(patterns, id, name)
+        {
+            (&p.id, &p.name, p.width, p.height, p.surface.format()).hash(&mut h);
+            format!("{:?}", p.surface.default_pixel()).hash(&mut h);
+            for (k, tile) in p.surface.tiles() {
+                (k.tx, k.ty, std::sync::Arc::as_ptr(tile) as usize).hash(&mut h);
+            }
+            used_patterns.push(p.clone());
+        }
+    }
     format!("{:?}{:?}{:?}{:?}", sh.path, sh.fill, sh.stroke, sh.live).hash(&mut h);
     if let Some(c) = &sh.cache {
         format!("{:?}{:?}", c.format(), c.default_pixel()).hash(&mut h);
@@ -72,7 +92,9 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
     let fmt = PixelFormat::RGBA8.with_sample(depth);
     let fill_only = ShapeLayer { stroke: None, cache: None, ..sh.clone() };
     let stroke_only = ShapeLayer { fill: None, cache: None, ..sh.clone() };
-    let mut parts = (photocraft_vector::render_shape(&fill_only, fmt, canvas), photocraft_vector::render_shape(&stroke_only, fmt, canvas));
+    let render =
+        |shape| photocraft_vector::CompiledShape::with_patterns(shape, photocraft_vector::DEFAULT_TOLERANCE, canvas, patterns, mode).render(fmt, canvas);
+    let mut parts = (render(&fill_only), render(&stroke_only));
     if let Some(cache) = &sh.cache {
         fit_stroke(&parts.0, &mut parts.1, cache, canvas);
     }
@@ -92,7 +114,7 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
         return Some(parts);
     }
     let tick = c.1;
-    c.0.insert(key, (parts.clone(), tick, sh.cache.clone()));
+    c.0.insert(key, (parts.clone(), tick, sh.cache.clone(), used_patterns));
     Some(parts)
 }
 

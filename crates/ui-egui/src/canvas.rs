@@ -1130,11 +1130,8 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
     if let Some(l) = live_stroke(app, idx) {
         return (l.stroke.doc().clone(), l.display_key());
     }
-    if let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview)
-        && app.session.active_index() == Some(idx)
-        && st.doc.layer(photocraft_doc::LayerId(t.layer)).is_some()
-    {
-        return (pv.doc.clone(), (1 << 40) + pv.session);
+    if let Some(shown) = crate::transform_tool::display_doc(app, idx) {
+        return shown;
     }
     // Layer Style dialog: show its effects live (Cancel just drops the preview).
     let style = app.ui.dialogs.iter().find(|d| d.kind == crate::state::DialogKind::LayerStyle);
@@ -1432,6 +1429,12 @@ pub(crate) fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), no
     }
     if seen.1 == now.1 ^ display_key && seen.0 + 1 == now.0 {
         return last_damage;
+    }
+    if seen.0 == now.0
+        && let Some(st) = app.session.documents().get(idx)
+        && let Some(r) = crate::transform_tool::damage(app, st.doc.id, now.0, seen.1 ^ display_key, now.1)
+    {
+        return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
     }
     if seen.0 == now.0
         && let Some(st) = app.session.documents().get(idx)
@@ -1880,6 +1883,65 @@ fn ensure_adjust_proxy(app: &mut PhotocraftApp, idx: usize, zoom: f32) -> Option
     Some((frame.k, key, size))
 }
 
+fn ensure_shape_proxy(app: &mut PhotocraftApp, idx: usize) -> Option<(u32, u64, [u32; 2])> {
+    crate::transform_tool::follow_edits(app);
+    let frame = crate::transform_tool::shape_proxy(app, idx)?;
+    let gpu = app.gpu.clone()?;
+    if !gpu.supports(&frame.doc) {
+        return None;
+    }
+    let key = frame.doc.id.0;
+    let size = [frame.doc.size.width, frame.doc.size.height];
+    if frame.stale || !gpu.has(key, size) {
+        let original = app.session.documents().get(idx)?.doc.clone();
+        let (display, _) = canvas_display(app, &original, None);
+        let damage = gpu.has(key, size).then_some(frame.region);
+        let r = gpu.refresh(key, &frame.doc, damage, display.as_deref());
+        app.perf.record("shape-proxy", r.px, r.composite_ms, r.upload_ms);
+        crate::transform_tool::shape_proxy_drawn(app, frame.key);
+    }
+    Some((frame.k, key, size))
+}
+
+/// CPU, mirrored views and unsupported GPU documents use the same bounded proxy frame.
+pub(crate) fn paint_shape_proxy(
+    app: &mut PhotocraftApp,
+    idx: usize,
+    ctx: &egui::Context,
+    painter: &egui::Painter,
+    xf: &ViewXform,
+    output: Option<u32>,
+) -> bool {
+    crate::transform_tool::follow_edits(app);
+    let Some(frame) = crate::transform_tool::shape_proxy(app, idx) else { return false };
+    if frame.region.is_empty() {
+        return true;
+    }
+    let Some(original) = app.session.documents().get(idx).map(|st| st.doc.clone()) else { return false };
+    let (display, display_key) = canvas_display(app, &original, output);
+    let tex = crate::transform_tool::shape_proxy_texture(app, frame.key, display_key).unwrap_or_else(|| {
+        let started = crate::gpu_canvas::now_ms();
+        let buffer = photocraft_compose::render(&frame.doc, frame.region);
+        let texture = ctx.load_texture("shape-transform-proxy", display_image(display.as_deref(), &buffer), TextureOptions::LINEAR);
+        let id = texture.id();
+        crate::transform_tool::set_shape_proxy_texture(app, frame.key, display_key, texture);
+        app.perf.span("shape proxy composite", crate::gpu_canvas::now_ms() - started);
+        id
+    });
+    let r = frame.region;
+    let k = frame.k as f32;
+    let points = [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1)].map(|(x, y)| xf.to_screen(x as f32 * k, y as f32 * k));
+    let uvs = [pos2(0.0, 0.0), pos2(1.0, 0.0), pos2(1.0, 1.0), pos2(0.0, 1.0)];
+    let mut mesh = Mesh::with_texture(tex);
+    for (pos, uv) in points.into_iter().zip(uvs) {
+        mesh.vertices.push(egui::epaint::Vertex { pos, uv, color: Color32::WHITE });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    painter.add(egui::Shape::mesh(mesh));
+    true
+}
+
 /// If a live adjustment preview is active on a large document, composite it on the proxy and upload
 /// it under its own GPU key. Returns (factor, gpu key, dimensions) when the proxy should be drawn.
 fn ensure_proxy_preview(app: &mut PhotocraftApp, idx: usize) -> Option<(u32, u64, [u32; 2])> {
@@ -1939,6 +2001,11 @@ pub(crate) fn retain_gpu_documents(app: &mut PhotocraftApp) {
         // retaining only document ids freed the previews every frame (blank canvas while previewing).
         let mut live: Vec<u64> = app.session.documents().iter().flat_map(|st| [st.doc.id.0, st.doc.id.0 ^ (1u64 << 61), st.doc.id.0 ^ (1u64 << 62)]).collect();
         live.extend(crate::adjust_preview::gpu_keys(app));
+        if let Some(idx) = app.session.active_index()
+            && let Some(frame) = crate::transform_tool::shape_proxy(app, idx)
+        {
+            live.push(frame.doc.id.0);
+        }
         gpu.retain(&live);
     }
     crate::background_redraw::retain(app);
@@ -2816,6 +2883,9 @@ fn hdr_preview(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Option<[f
 /// Draw one canvas view and handle its input. `primary` = main window (tools active).
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
+    if primary {
+        crate::shape_canvas::cancel_if_left(app);
+    }
     // The camera as the app holds it before this frame's input. The canvas works on its own copy
     // (`view`) and writes it back at the end; a tool that moves the camera itself meanwhile (the
     // Crop tool's default mode pans and turns the view with the image, `crop_mode`) must not be
@@ -2903,8 +2973,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         let gpu_ok = crate::gpu_canvas::gpu_view_ok(flip, view.rotation, aspect);
         if app.gpu.is_some()
             && gpu_ok
-            && let Some((k, key, preview_size)) =
-                ensure_adjust_proxy(app, idx, view.zoom).or_else(|| ensure_filter_preview(app, idx, &ctx)).or_else(|| ensure_proxy_preview(app, idx))
+            && let Some((k, key, preview_size)) = ensure_shape_proxy(app, idx)
+                .or_else(|| ensure_adjust_proxy(app, idx, view.zoom))
+                .or_else(|| ensure_filter_preview(app, idx, &ctx))
+                .or_else(|| ensure_proxy_preview(app, idx))
         {
             on_gpu = true;
             app.navigator_gpu.remove(&doc.id);
@@ -2931,7 +3003,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 offset: [0.0, 0.0],
             };
             paint_gpu_view(&painter, rect, params, &pattern);
-        } else if gpu_ok && ensure_gpu(app, &ctx, idx, visible_doc_rect(&xf)) {
+        } else if crate::transform_tool::shape_proxy(app, idx).is_none() && gpu_ok && ensure_gpu(app, &ctx, idx, visible_doc_rect(&xf)) {
             on_gpu = true;
             app.perf.gpu = true;
             // Shadow, checkerboard, document and pixel grid in one custom shader (gpu_canvas.rs).
@@ -2965,10 +3037,19 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             }
             let rotated = view.rotation.abs() > 0.05;
             let checkerboard = app.session.prefs().transparency_and_gamut.square().map(|square| (checker(app, &ctx), square));
-            let tex = ensure_texture(app, &ctx, idx, output).map(|(tex, _scale)| tex);
+            crate::transform_tool::follow_edits(app);
+            let shape_proxy = crate::transform_tool::shape_proxy(app, idx).is_some();
+            let tex = if shape_proxy { None } else { ensure_texture(app, &ctx, idx, output).map(|(tex, _scale)| tex) };
             paint_cpu_document(&painter, &xf, doc.bounds(), rotated, checkerboard, tex);
+            if shape_proxy {
+                paint_shape_proxy(app, idx, &ctx, &painter, &xf, output);
+            }
             for &c in &pattern {
-                paint_cpu_document(&painter, &pattern_xf(&xf, c, size), doc.bounds(), rotated, checkerboard, tex);
+                let copy_xf = pattern_xf(&xf, c, size);
+                paint_cpu_document(&painter, &copy_xf, doc.bounds(), rotated, checkerboard, tex);
+                if shape_proxy {
+                    paint_shape_proxy(app, idx, &ctx, &painter, &copy_xf, output);
+                }
             }
         }
         // Channels panel: alpha / Quick Mask overlays and single-channel views (channel_view.rs).
@@ -3191,6 +3272,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // ⌘ held: this frame's gestures go to the Move tool (`PhotocraftApp::active_tool`). The Hand
     // and Zoom never reach `tool_event`, so only the Move needs the state machine to know.
     app.tool_override = (temporary == Some(crate::hold_keys::Temporary::Move)).then_some(Tool::Move);
+    if primary {
+        crate::shape_canvas::end_if_navigation(app, tool);
+    }
     // `~` held: a Brush or Pencil stroke that starts now erases (`tool_event`'s `Down`).
     app.held_erase = crate::hold_keys::erase_held(app, &ctx);
     // Zoom direction: the temporary zoom key decides, else ⌥ (Zoom tool), held or latched in
@@ -3414,7 +3498,21 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
         // A drag is only recognised once the pointer has moved past egui's click distance: the
         // gesture starts where the button went down, not where it is now (#123).
-        let gesture_active_before = app.drag.is_some();
+        let gesture_active_before = app.drag.is_some() || crate::shape_canvas::dragging(app);
+        let shape_press = egui::Id::new("shape-pointer-press-modifiers");
+        if crate::shape_canvas::supports_tool(tool)
+            && response.is_pointer_button_down_on()
+            && ui.input(|i| i.pointer.primary_pressed())
+            && let Some(p) = ui.input(|i| i.pointer.press_origin()).filter(|p| rect.contains(*p))
+        {
+            let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary)).unwrap_or(mods);
+            if crate::vector_ui::is_shape_tool(tool) {
+                ctx.data_mut(|d| d.insert_temp(shape_press, press_mods));
+            }
+            let d = xf.to_doc(p);
+            crate::shape_canvas::pointer(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
+        }
+        let radius_drag = crate::shape_canvas::dragging(app);
         // Stroke timing: egui's events carry no timestamps, so a press takes the frame time and
         // the moves below are spread between the previous point and this frame (`spread_ms`).
         let now_ms = ui.input(|i| i.time) * 1000.0;
@@ -3435,23 +3533,29 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             app.press_stroke = app.drag.is_some();
         }
         let press_stroke = app.press_stroke;
-        if press_stroke {
+        if press_stroke || radius_drag {
             buttons.started = false;
         }
         if buttons.started
             && let Some(p) = ui.input(|i| i.pointer.press_origin()).filter(|p| rect.contains(*p)).or(response.interact_pointer_pos())
         {
-            if tool == Tool::Move && app.ui.transform.is_none() {
+            if app.ui.transform.is_none() {
                 begin_transform_controls_at(app, &ctx, &xf, p);
             }
             let d = xf.to_doc(p);
-            let press_mods = if capture_press { ctx.data(|d| d.get_temp(tool_press)).unwrap_or(mods) } else { mods };
+            let press_mods = if capture_press {
+                ctx.data(|d| d.get_temp(tool_press)).unwrap_or(mods)
+            } else if crate::vector_ui::is_shape_tool(tool) {
+                ctx.data(|d| d.get_temp(shape_press)).unwrap_or(mods)
+            } else {
+                mods
+            };
             tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
         }
         // A stroke started on the press takes its moves from the press on, not only once egui
         // recognises a drag (past its click distance): otherwise the first few points are lost
         // and the stroke starts with a straight segment and no pressure ramp.
-        let press_stroke_moving = press_stroke && app.drag.is_some();
+        let press_stroke_moving = (press_stroke && app.drag.is_some()) || radius_drag;
         if buttons.dragged || buttons.stopped || press_stroke_moving {
             // Feed every pointer move the OS delivered this frame, not just the latest position, so
             // a fast stroke is sampled densely and renders as a smooth curve instead of a coarse
@@ -3512,7 +3616,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             // The live painting press already created the stroke and this release commits it.
             // egui may also report clicked on the same release; replaying that click paints a
             // second full-pressure dab over the real (possibly light-pressure) pen dab.
-            if press_stroke {
+            if press_stroke || radius_drag {
                 buttons.clicked = false;
             }
             let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
@@ -3523,11 +3627,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
         // A stroke started on the press ends with the release, whether egui saw a drag, a click,
         // or neither (a long press that never moved).
-        if press_stroke && !buttons.stopped && ui.input(|i| i.pointer.primary_released()) {
+        if (press_stroke || radius_drag) && !buttons.stopped && ui.input(|i| i.pointer.primary_released()) {
             buttons.clicked = false;
             let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
             if let Some(d) = p
-                && app.drag.is_some()
+                && (app.drag.is_some() || crate::shape_canvas::dragging(app))
             {
                 tap_at_peak_pressure(app);
                 tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
@@ -3540,7 +3644,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             && let Some(p) = response.interact_pointer_pos()
         {
             let click_button = if app.secondary_erase { PointerButton::Secondary } else { PointerButton::Primary };
-            let click_mods = ui.input(|i| pointer_button_modifiers(&i.events, click_button)).unwrap_or(mods);
+            let click_mods = if crate::vector_ui::is_shape_tool(tool) {
+                ctx.data(|d| d.get_temp(shape_press)).unwrap_or_else(|| ui.input(|i| pointer_button_modifiers(&i.events, click_button)).unwrap_or(mods))
+            } else {
+                ui.input(|i| pointer_button_modifiers(&i.events, click_button)).unwrap_or(mods)
+            };
             let d = xf.to_doc(p);
             match tool {
                 Tool::Zoom if !transform_owns_pointer => {
@@ -3559,7 +3667,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 // The first click placed (or grabbed) the point; the second toggles it.
                 Tool::CurvaturePen if response.double_clicked() => crate::vector_ui::curvature_toggle(app, d[0], d[1]),
                 _ => {
-                    if tool == Tool::Move && app.ui.transform.is_none() {
+                    if app.ui.transform.is_none() {
                         begin_transform_controls_at(app, &ctx, &xf, p);
                     }
                     // If this tool was not handled on pointer-down, fall back to a
@@ -3653,7 +3761,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
         crate::zoom_tool::draw(&ctx, &painter);
         let resizing = crate::brush_resize::draw(app, &painter, &xf);
-        draw_transform_controls(app, &painter, &xf);
+        if !matches!(tool, Tool::Hand | Tool::Zoom | Tool::RotateView) {
+            draw_transform_controls(app, &painter, &xf);
+        }
         crate::move_hover::draw(app, &painter, &xf, idx, response.hover_pos());
         crate::object_finder::draw(app, &painter, &xf, idx, response.hover_pos());
         crate::layer_pick_ui::show(app, &ctx);
@@ -3681,6 +3791,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         crate::perspective_crop_ui::draw_overlay(app, &painter, &xf);
         crate::retouch_ui::draw_source_marker(app, &painter, &xf);
         crate::vector_ui::draw_overlay(app, &painter, &xf, &doc);
+        if crate::shape_canvas::supports_tool(tool) {
+            crate::shape_canvas::draw_overlay(app, &painter, &xf);
+        }
         crate::symmetry_ui::draw(app, &painter, &xf);
         crate::analysis_ui::draw_overlay(app, &painter, &xf);
         crate::gradient_ui::draw_overlay(app, &painter, &xf);
@@ -3712,13 +3825,14 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             ui.ctx().set_cursor_icon(c);
         } else if let Some(c) = response.hover_pos().and_then(|p| crate::cam_transform::cursor(app, &ctx, &xf, p)) {
             ui.ctx().set_cursor_icon(c);
-        } else if let Some((r, p, c)) =
-            response.hover_pos().and_then(|p| transform_controls_rect(app, &xf).and_then(|r| transform_controls_cursor(r, p).map(|c| (r, p, c))))
+        } else if let Some((p, c)) = response
+            .hover_pos()
+            .filter(|_| !matches!(tool, Tool::Hand | Tool::Zoom | Tool::RotateView))
+            .and_then(|p| transform_controls_cursor(app, &xf, p).map(|c| (p, c)))
         {
-            // The Move tool draws handles without opening a Free Transform session.
-            // Give them their resize/rotate cursors before the first pointer press (#2871).
+            // Move controls show resize/rotate cursors before the first pointer press (#2871).
             ui.ctx().set_cursor_icon(c);
-            if let Some(toward) = transform_controls_turn(r, p) {
+            if let Some(toward) = transform_controls_turn(app, &xf, p) {
                 crate::crop_ui::draw_turn_cursor(&ctx, p, toward);
             }
         } else if let Some(c) = response.hover_pos().filter(|_| tool.is_type()).and_then(|p| {
@@ -3915,6 +4029,15 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             }
             // ⇧ after a stroke: the straight line a click would paint (#257).
             crate::stroke_constraint::draw_line_preview(app, &painter, &xf, p, tool, held.shift);
+        }
+        // Keep resize directions in the displayed view after the shared cursor path has run.
+        if guide_hover.is_none()
+            && let Some(c) =
+                response.hover_pos().and_then(|p| transform_cursor_in_view(app, &xf, p, ui.input(|i| i.modifiers.alt || i.modifiers.command))).or_else(|| {
+                    response.hover_pos().filter(|_| crate::shape_canvas::supports_tool(tool)).and_then(|p| crate::shape_canvas::cursor(app, xf.to_doc(p)))
+                })
+        {
+            ui.ctx().set_cursor_icon(c);
         }
     }
     if primary && hand_pan && response.dragged() {
@@ -4487,18 +4610,47 @@ pub(crate) fn layer_edges_rect(app: &PhotocraftApp, idx: usize) -> Option<photoc
     if b.is_empty() {
         return None;
     }
-    let (dx, dy) = crate::move_ui::shown_offset(app, st.doc.id, st.revision, id).unwrap_or((0, 0));
+    let (dx, dy) = crate::move_ui::shown_layer_offset(app, st.doc.id, st.revision, id).unwrap_or((0, 0));
     Some(b.translate(dx, dy))
 }
 
 /// Move tool › Show Transform Controls: the active layer's transform bounds.
-fn transform_controls_rect(app: &PhotocraftApp, xf: &ViewXform) -> Option<Rect> {
-    if app.ui.tool != Tool::Move || !app.ui.tool_options.move_show_transform || app.ui.transform.is_some() || app.drag.is_some() {
+#[derive(Debug, PartialEq)]
+struct TransformControls {
+    bounds: Rect,
+    corners: [Pos2; 4],
+}
+
+impl TransformControls {
+    fn handles(&self) -> [Pos2; 8] {
+        let q = self.corners;
+        [q[0], q[0].lerp(q[1], 0.5), q[1], q[1].lerp(q[2], 0.5), q[2], q[2].lerp(q[3], 0.5), q[3], q[3].lerp(q[0], 0.5)]
+    }
+
+    fn handle_at(&self, p: Pos2, grab: f32) -> Option<usize> {
+        self.handles().into_iter().enumerate().map(|(i, h)| (i, h.distance(p))).filter(|(_, d)| *d < grab).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(i, _)| i)
+    }
+}
+
+pub(crate) fn shape_transform_controls_target(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|st| st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| matches!(l.content, LayerContent::Shape(_))))
+}
+
+fn transform_controls_rect(app: &PhotocraftApp, xf: &ViewXform) -> Option<TransformControls> {
+    let tool = app.active_tool();
+    let shape = shape_transform_controls_target(app);
+    let visible = if shape {
+        app.ui.tool_options.shape.show_transform && (tool == Tool::Move || (crate::vector_ui::is_shape_tool(tool) && app.ui.tool_options.shape.mode == "shape"))
+    } else {
+        tool == Tool::Move && app.ui.tool_options.move_show_transform
+    };
+    if !visible || paint_target(app) != "pixels" || app.ui.mask_target || app.ui.vector_mask_target || app.ui.transform.is_some() || app.drag.is_some() {
         return None;
     }
     let st = app.session.active()?;
     let l = st.active_layer.and_then(|id| st.doc.layer(id))?;
-    if crate::doc_props_ui::is_background(&st.doc, l) {
+    let locks = st.doc.effective_locks(l.id);
+    if crate::doc_props_ui::is_background(&st.doc, l) || (tool != Tool::Move && (locks.all || locks.position)) {
         return None;
     }
     let b = photocraft_engine::transform_cmds::transform_bounds(&st.doc, l);
@@ -4507,59 +4659,93 @@ fn transform_controls_rect(app: &PhotocraftApp, xf: &ViewXform) -> Option<Rect> 
     if b.is_empty() {
         return None;
     }
-    Some(Rect::from_two_pos(xf.to_screen(b.x0 as f32, b.y0 as f32), xf.to_screen(b.x1 as f32, b.y1 as f32)))
-}
-
-/// The Move tool shows transform handles even before a Free Transform session exists.
-/// Use the same hit areas for pointer-down and hover, so a control never behaves like
-/// resize/rotate while showing the ordinary four-arrow Move cursor (#2871).
-fn transform_controls_cursor(r: Rect, p: Pos2) -> Option<egui::CursorIcon> {
-    let handles = [r.left_top(), r.center_top(), r.right_top(), r.right_center(), r.right_bottom(), r.center_bottom(), r.left_bottom(), r.left_center()];
-    let grab = crate::transform_tool::HANDLE_PX as f32;
-    for (i, handle) in handles.into_iter().enumerate() {
-        if handle.distance(p) <= grab {
-            return Some(match i {
-                0 | 4 => egui::CursorIcon::ResizeNwSe,
-                2 | 6 => egui::CursorIcon::ResizeNeSw,
-                1 | 5 => egui::CursorIcon::ResizeVertical,
-                _ => egui::CursorIcon::ResizeHorizontal,
-            });
-        }
-    }
-    // The rotation band: the pointer gives way to the curved rotate arrow (`transform_controls_turn`).
-    in_rotation_band(r, p).then_some(egui::CursorIcon::None)
-}
-
-fn in_rotation_band(r: Rect, p: Pos2) -> bool {
-    r.expand(18.0).contains(p) && !r.expand(5.0).contains(p)
-}
-
-/// In the rotation band just outside the Move tool's transform controls, the screen direction the
-/// curved rotate arrow bends round: into the box along the nearest corner's bisector, as Free
-/// Transform draws it (#4658). Before, the band showed a plain alias pointer, so nothing said a
-/// drag there rotates.
-fn transform_controls_turn(r: Rect, p: Pos2) -> Option<Vec2> {
-    if !in_rotation_band(r, p)
-        || [r.left_top(), r.center_top(), r.right_top(), r.right_center(), r.right_bottom(), r.center_bottom(), r.left_bottom(), r.left_center()]
-            .into_iter()
-            .any(|h| h.distance(p) <= crate::transform_tool::HANDLE_PX as f32)
-    {
-        return None;
-    }
-    let corner = pos2(if p.x < r.center().x { r.left() } else { r.right() }, if p.y < r.center().y { r.top() } else { r.bottom() });
-    Some(vec2((r.center().x - corner.x).signum(), (r.center().y - corner.y).signum()).normalized() * 16.0)
+    Some(TransformControls {
+        bounds: Rect::from_min_max(pos2(b.x0 as f32, b.y0 as f32), pos2(b.x1 as f32, b.y1 as f32)),
+        corners: [[b.x0, b.y0], [b.x1, b.y0], [b.x1, b.y1], [b.x0, b.y1]].map(|p| xf.to_screen(p[0] as f32, p[1] as f32)),
+    })
 }
 
 /// A visible handle starts scaling; the narrow band just outside the box starts rotation.
 /// The interior stays the normal Move-tool drag target.
-fn transform_controls_hit(r: Rect, p: Pos2) -> bool {
-    transform_controls_cursor(r, p).is_some()
+fn transform_controls_hit(r: &TransformControls, xf: &ViewXform, p: Pos2) -> bool {
+    let d = xf.to_doc(p);
+    let p_doc = pos2(d[0] as f32, d[1] as f32);
+    let zoom = xf.zoom.max(0.01);
+    r.handle_at(p, crate::transform_tool::HANDLE_PX as f32).is_some()
+        || (r.bounds.expand(18.0 / zoom).contains(p_doc) && !r.bounds.expand(5.0 / zoom).contains(p_doc))
+}
+
+fn transform_controls_cursor(app: &PhotocraftApp, xf: &ViewXform, p: Pos2) -> Option<egui::CursorIcon> {
+    let r = transform_controls_rect(app, xf)?;
+    let shape_tool = crate::vector_ui::is_shape_tool(app.active_tool());
+    let grab = if shape_tool { 6.0 } else { crate::transform_tool::HANDLE_PX as f32 };
+    if let Some(i) = r.handle_at(p, grab) {
+        let handles = r.handles();
+        let direction = *handles.get(i)? - *handles.get((i + 4) % 8)?;
+        return Some(transform_resize_cursor(direction));
+    }
+    (!shape_tool && transform_controls_hit(&r, xf, p)).then_some(egui::CursorIcon::None)
+}
+
+/// The Move rotation band replaces the pointer with a curved arrow (#4658).
+/// Find its nearest corner in document space, then turn its bisector into the shown view.
+fn transform_controls_turn(app: &PhotocraftApp, xf: &ViewXform, p: Pos2) -> Option<Vec2> {
+    let r = transform_controls_rect(app, xf)?;
+    if crate::vector_ui::is_shape_tool(app.active_tool())
+        || r.handle_at(p, crate::transform_tool::HANDLE_PX as f32).is_some()
+        || !transform_controls_hit(&r, xf, p)
+    {
+        return None;
+    }
+    let d = xf.to_doc(p);
+    let center = r.bounds.center();
+    let corner =
+        pos2(if d[0] < center.x as f64 { r.bounds.left() } else { r.bounds.right() }, if d[1] < center.y as f64 { r.bounds.top() } else { r.bounds.bottom() });
+    let direction = vec2((center.x - corner.x).signum(), (center.y - corner.y).signum());
+    Some(xf.map_vec(direction).normalized() * 16.0)
+}
+
+fn transform_resize_cursor(direction: Vec2) -> egui::CursorIcon {
+    let angle = direction.y.atan2(direction.x).rem_euclid(std::f32::consts::PI);
+    match ((angle / std::f32::consts::FRAC_PI_4).round() as u32) % 4 {
+        0 => egui::CursorIcon::ResizeHorizontal,
+        1 => egui::CursorIcon::ResizeNwSe,
+        2 => egui::CursorIcon::ResizeVertical,
+        _ => egui::CursorIcon::ResizeNeSw,
+    }
+}
+
+fn transform_cursor_in_view(app: &PhotocraftApp, xf: &ViewXform, p: Pos2, alt: bool) -> Option<egui::CursorIcon> {
+    let d = xf.to_doc(p);
+    let cursor = crate::transform_tool::cursor(app, d, alt)?;
+    let shown = crate::transform_tool::shown_shape_transform(app);
+    let t = shown.as_ref().or(app.ui.transform.as_ref())?;
+    if t.warp.is_some() {
+        return Some(cursor);
+    }
+    let q = t.quad.map(|p| xf.to_screen(p[0] as f32, p[1] as f32));
+    let direction = match crate::transform_tool::hit(t, d, crate::transform_tool::handle_tolerance(app)) {
+        crate::transform_tool::Hit::Corner(i) => *q.get(i)? - *q.get((i + 2) % 4)?,
+        crate::transform_tool::Hit::Edge(i) if t.mode != crate::state::TransformMode::Distort => {
+            q.get(i)?.lerp(*q.get((i + 1) % 4)?, 0.5) - q.get((i + 2) % 4)?.lerp(*q.get((i + 3) % 4)?, 0.5)
+        }
+        _ => return Some(cursor),
+    };
+    Some(transform_resize_cursor(direction))
 }
 
 /// Enter the existing Free Transform session when a Move-tool transform control is pressed.
-fn begin_transform_controls_at(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, p: Pos2) -> bool {
+pub(crate) fn begin_transform_controls_at(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, p: Pos2) -> bool {
+    if crate::shape_canvas::cursor(app, xf.to_doc(p)).is_some() {
+        return false;
+    }
     let Some(r) = transform_controls_rect(app, xf) else { return false };
-    if !transform_controls_hit(r, p) {
+    // Shape-tool drags outside a visible grip still draw new components (Shift/Alt).
+    // Move retains its generous grip area and rotation band.
+    if crate::vector_ui::is_shape_tool(app.active_tool()) && r.handle_at(p, 6.0).is_none() {
+        return false;
+    }
+    if !transform_controls_hit(&r, xf, p) {
         return false;
     }
     match crate::transform_tool::begin(app, ctx) {
@@ -4575,8 +4761,8 @@ fn begin_transform_controls_at(app: &mut PhotocraftApp, ctx: &egui::Context, xf:
 fn draw_transform_controls(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let Some(r) = transform_controls_rect(app, xf) else { return };
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
-    painter.rect_stroke(r, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Middle);
-    for p in [r.left_top(), r.center_top(), r.right_top(), r.right_center(), r.right_bottom(), r.center_bottom(), r.left_bottom(), r.left_center()] {
+    painter.add(egui::Shape::closed_line(r.corners.to_vec(), Stroke::new(1.0, accent)));
+    for p in r.handles() {
         let h = Rect::from_center_size(p, vec2(7.0, 7.0));
         painter.rect_filled(h, 0.0, Color32::WHITE);
         painter.rect_stroke(h, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Inside);
@@ -4854,6 +5040,9 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     let armed = std::mem::take(&mut app.brush_resize_armed);
     crate::transform_tool::end_if_left(app);
     let mods = crate::workspace_ui::sticky_mods(app, mods);
+    if crate::shape_canvas::pointer(app, ev, mods) {
+        return;
+    }
     if app.ui.transform.is_none() && crate::type_transform::pointer(app, ev, mods) {
         return;
     }
@@ -5519,8 +5708,8 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
         // Photoshop: a click without dragging opens Create Rectangle / Ellipse / … instead.
         t if crate::vector_ui::is_shape_tool(t)
             && crate::shape_dialog::is_click(d.start, &d.points, app.point_zoom())
-            && crate::shape_dialog::open(app, t, d.start).is_some() => {}
-        t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape(app, t, d.start, [end[0], end[1]], d.live),
+            && crate::shape_dialog::open_gesture(app, t, d.start, d.modifiers).is_some() => {}
+        t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape_gesture(app, t, d.start, [end[0], end[1]], d.modifiers, d.live),
         Tool::PathSelection => crate::vector_ui::path_selection_finish(app, d.start, [end[0], end[1]]),
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),
         Tool::Brush | Tool::Pencil | Tool::Eraser => commit_brush_stroke(app, &d),
@@ -7627,10 +7816,10 @@ mod transform_controls_tests {
         let xf =
             ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
         let r = transform_controls_rect(&app, &xf).expect("shape layers have transform bounds");
-        assert!(transform_controls_hit(r, r.right_bottom()));
+        assert!(transform_controls_hit(&r, &xf, r.corners[2]));
 
         let ctx = egui::Context::default();
-        assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
+        assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.corners[2]));
         let t = app.ui.transform.as_ref().expect("control press starts Free Transform");
         assert_eq!(t.rect, [20.0, 30.0, 100.0, 70.0]);
     }
@@ -7648,9 +7837,10 @@ mod transform_controls_tests {
         let xf =
             ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), zoom: 1.0, center: [200.0, 150.0], flip: false, rotation: 0.0, aspect: 1.0 };
         let r = transform_controls_rect(&app, &xf).unwrap();
-        assert_eq!(r, Rect::from_min_max(pos2(200.0, 150.0), pos2(300.0, 210.0)));
+        assert_eq!(r.bounds, Rect::from_min_max(pos2(200.0, 150.0), pos2(300.0, 210.0)));
+        assert_eq!(r.corners[2], pos2(300.0, 210.0));
         let ctx = egui::Context::default();
-        assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
+        assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.corners[2]));
         assert_eq!(app.ui.transform.as_ref().unwrap().rect, [200.0, 150.0, 300.0, 210.0]);
     }
 
@@ -7690,7 +7880,7 @@ mod transform_controls_tests {
         let xf =
             ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
         let r = transform_controls_rect(&app, &xf).unwrap();
-        assert!(!begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
+        assert!(!begin_transform_controls_at(&mut app, &ctx, &xf, r.corners[2]));
         assert!(app.ui.transform.is_none());
         assert_eq!(errors(&app), [crate::transform_tool::LOCKED]);
     }
@@ -7709,49 +7899,62 @@ mod transform_controls_tests {
         let r = transform_controls_rect(&app, &xf).expect("visible shape controls");
         assert!(app.ui.transform.is_none(), "no transform session is needed for hover");
         for (p, expected) in [
-            (r.left_top(), egui::CursorIcon::ResizeNwSe),
-            (r.right_bottom(), egui::CursorIcon::ResizeNwSe),
-            (r.right_top(), egui::CursorIcon::ResizeNeSw),
-            (r.left_bottom(), egui::CursorIcon::ResizeNeSw),
-            (r.center_top(), egui::CursorIcon::ResizeVertical),
-            (r.center_bottom(), egui::CursorIcon::ResizeVertical),
-            (r.right_center(), egui::CursorIcon::ResizeHorizontal),
-            (r.left_center(), egui::CursorIcon::ResizeHorizontal),
-            // Between handles: the rotation band (a point above the top-centre handle is that handle),
-            // where the curved rotate arrow replaces the pointer (#4658).
-            (pos2(r.left() + r.width() * 0.25, r.top() - 12.0), egui::CursorIcon::None),
+            (r.corners[0], egui::CursorIcon::ResizeNwSe),
+            (r.corners[2], egui::CursorIcon::ResizeNwSe),
+            (r.corners[1], egui::CursorIcon::ResizeNeSw),
+            (r.corners[3], egui::CursorIcon::ResizeNeSw),
+            (r.handles()[1], egui::CursorIcon::ResizeVertical),
+            (r.handles()[5], egui::CursorIcon::ResizeVertical),
+            (r.handles()[3], egui::CursorIcon::ResizeHorizontal),
+            (r.handles()[7], egui::CursorIcon::ResizeHorizontal),
+            // Between handles: the rotation band (a point above the top-centre handle is that handle).
+            (pos2(r.bounds.left() + r.bounds.width() * 0.25, r.bounds.top() - 12.0), egui::CursorIcon::None),
         ] {
-            assert_eq!(transform_controls_cursor(r, p), Some(expected), "hover at {p:?}");
-            assert!(transform_controls_hit(r, p), "same region must start a transform");
+            assert_eq!(transform_controls_cursor(&app, &xf, p), Some(expected), "hover at {p:?}");
+            assert!(transform_controls_hit(&r, &xf, p), "same region must start a transform");
         }
-        assert_eq!(transform_controls_cursor(r, r.center()), None, "interior stays Move");
-        assert_eq!(transform_controls_cursor(r, pos2(r.center().x, r.top() - 30.0)), None);
-        // The rotate arrow bends round the nearest corner, pointing into the box; handles and the
-        // interior have none.
-        let into = |p: Pos2| transform_controls_turn(r, p).map(|v| (v.x.signum(), v.y.signum()));
-        assert_eq!(into(pos2(r.left() + r.width() * 0.25, r.top() - 12.0)), Some((1.0, 1.0)), "top left");
-        assert_eq!(into(pos2(r.right() + 12.0, r.bottom() - r.height() * 0.25)), Some((-1.0, -1.0)), "bottom right");
-        assert_eq!(into(pos2(r.left() - 12.0, r.bottom() + 12.0)), Some((1.0, -1.0)), "beyond the bottom-left corner");
-        assert_eq!(into(r.left_top()), None);
-        assert_eq!(into(r.center()), None);
+        assert_eq!(transform_controls_cursor(&app, &xf, r.bounds.center()), None, "interior stays Move");
+        assert_eq!(transform_controls_cursor(&app, &xf, pos2(r.bounds.center().x, r.bounds.top() - 30.0)), None);
+
+        // The curved arrow bends into the nearest corner; handles and the interior have none.
+        let into = |p: Pos2| transform_controls_turn(&app, &xf, p).map(|v| (v.x.signum(), v.y.signum()));
+        assert_eq!(into(pos2(r.bounds.left() + r.bounds.width() * 0.25, r.bounds.top() - 12.0)), Some((1.0, 1.0)), "top left");
+        assert_eq!(into(pos2(r.bounds.right() + 12.0, r.bounds.bottom() - r.bounds.height() * 0.25)), Some((-1.0, -1.0)), "bottom right");
+        assert_eq!(into(pos2(r.bounds.left() - 12.0, r.bounds.bottom() + 12.0)), Some((1.0, -1.0)), "beyond bottom-left corner");
+        assert_eq!(into(r.corners[0]), None);
+        assert_eq!(into(r.bounds.center()), None);
+        let point = pos2(r.bounds.left() + r.bounds.width() * 0.25, r.bounds.top() - 12.0);
+        for (rotation, flip, expected) in [(90.0, false, (-1.0, 1.0)), (90.0, true, (1.0, 1.0)), (0.0, true, (-1.0, 1.0))] {
+            let shown = ViewXform { rotation, flip, ..xf };
+            let arrow = transform_controls_turn(&app, &shown, shown.to_screen(point.x, point.y)).expect("shown rotation band");
+            assert_eq!((arrow.x.signum(), arrow.y.signum()), expected, "rotation {rotation}, flip {flip}");
+            assert!((arrow.length() - 16.0).abs() < 0.001, "arrow size stays in screen points");
+        }
 
         // Changing the active shape changes the hover bounds without requiring a drag first.
         app.session.execute("shape.create", json!({"kind": "rect", "rect": [120, 100, 40, 50], "fill": "#00ff00"})).unwrap();
         let next = transform_controls_rect(&app, &xf).expect("new active shape controls");
         assert_ne!(r, next);
-        assert_eq!(transform_controls_cursor(next, next.right_bottom()), Some(egui::CursorIcon::ResizeNwSe));
-        assert_eq!(transform_controls_cursor(next, next.center()), None);
+        assert_eq!(transform_controls_cursor(&app, &xf, next.corners[2]), Some(egui::CursorIcon::ResizeNwSe));
+        assert_eq!(transform_controls_cursor(&app, &xf, next.bounds.center()), None);
     }
 
     #[test]
     fn transform_control_hit_keeps_move_interior_free_and_has_rotation_band() {
-        let r = Rect::from_min_max(pos2(20.0, 30.0), pos2(100.0, 70.0));
-        assert!(transform_controls_hit(r, r.left_top()));
-        assert!(transform_controls_hit(r, pos2(60.0, 18.0)));
-        assert!(!transform_controls_hit(r, r.center()));
-        assert!(!transform_controls_hit(r, pos2(60.0, 4.0)));
+        let bounds = Rect::from_min_max(pos2(20.0, 30.0), pos2(100.0, 70.0));
+        let r = TransformControls { bounds, corners: [bounds.left_top(), bounds.right_top(), bounds.right_bottom(), bounds.left_bottom()] };
+        let xf =
+            ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        assert!(transform_controls_hit(&r, &xf, r.corners[0]));
+        assert!(transform_controls_hit(&r, &xf, pos2(60.0, 18.0)));
+        assert!(!transform_controls_hit(&r, &xf, r.bounds.center()));
+        assert!(!transform_controls_hit(&r, &xf, pos2(60.0, 4.0)));
     }
 }
+
+#[cfg(test)]
+#[path = "shape_controls_tests.rs"]
+mod shape_controls_tests;
 
 #[cfg(test)]
 mod layer_edges_tests;

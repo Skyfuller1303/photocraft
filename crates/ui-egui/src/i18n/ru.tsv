@@ -18,6 +18,35 @@
 # the Russian typographic equivalent, with the space the source carries.
 
 # Channel Options and New Spot Channel (#3761)
+# PR #3446 shape/paint labels (kept before shared catalog entries)
+	Align Edges	Выровнять края
+	Align to Canvas	Выровнять по холсту
+	Arrowheads	Наконечники стрелок
+	Bring Shape Forward	Переместить фигуру вперёд
+	Bring Shape to Front	Переместить фигуру на передний план
+	Color Picker	Выбор цвета
+	Color opacity	Непрозрачность цвета
+	Concavity:	Вогнутость:
+	Constrain Proportions	Сохранить пропорции
+	Distribute Horizontally	Распределить по горизонтали
+	Distribute Vertically	Распределить по вертикали
+	End	Конец
+	No recent colors	Нет недавно использованных цветов
+	Path Alignment	Выравнивание контуров
+	Path Arrangement	Порядок контуров
+	Path Operations	Операции с контурами
+	Path Options	Параметры контура
+	Proportional	Пропорционально
+	Recent Colors	Недавно использованные цвета
+	Send Shape Backward	Переместить фигуру назад
+	Send Shape to Back	Переместить фигуру на задний план
+	Show Path	Показать контур
+	Smooth Indents	Сгладить впадины
+	Solid Color	Сплошной цвет
+	Start	Начало
+	Stop opacity	Непрозрачность точки
+	Unconstrained	Без ограничений
+
 	Channel Color	Цвет канала
 	Color Indicates:	Цветом обозначены:
 	Solidity:	Плотность:

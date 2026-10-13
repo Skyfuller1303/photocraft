@@ -1,7 +1,7 @@
 //! Layers panel row: the right-hand indicators and the name between them and the thumbnails
 //! (#144).
 //!
-//! The indicators (lock, fx badge with its effects triangle, link, the blend-mode label) are
+//! The indicators (lock, fx badge with its effects triangle, link, shape type, blend-mode label) are
 //! laid out first, from the row's right edge inward; the name gets the width that is left and
 //! is cut with an ellipsis, so a long name never runs under an indicator at any panel width or
 //! UI scale. The blend-mode label is optional: it is dropped before the name gets too narrow.
@@ -9,7 +9,7 @@
 
 use egui::{Align2, FontId, Galley, Painter, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use photocraft_color::BlendMode;
-use photocraft_doc::Layer;
+use photocraft_doc::{Layer, LayerContent};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -34,6 +34,7 @@ pub enum Indicator {
     FxTriangle,
     Fx,
     Link,
+    Shape,
     Blend,
 }
 
@@ -78,6 +79,9 @@ pub fn reserved_width(l: &Layer) -> f32 {
         w += TRIANGLE_W + 1.0 + 13.0 + GAP;
     }
     if l.link_group.is_some() {
+        w += ICON_W + GAP;
+    }
+    if matches!(l.content, LayerContent::Shape(_)) {
         w += ICON_W + GAP;
     }
     w
@@ -131,6 +135,9 @@ pub fn indicators(
     if l.link_group.is_some() {
         items.push((Indicator::Link, ICON_W));
     }
+    if matches!(l.content, LayerContent::Shape(_)) {
+        items.push((Indicator::Shape, ICON_W));
+    }
     if let Some(g) = &blend_galley {
         items.push((Indicator::Blend, g.size().x));
     }
@@ -141,6 +148,11 @@ pub fn indicators(
         match kind {
             Indicator::Lock => icons::paint(ui, Rect::from_center_size(r.center(), vec2(ICON_W, ICON_W)), "lock", 12.0, t.text_faint),
             Indicator::Link => icons::paint(ui, Rect::from_center_size(r.center(), vec2(ICON_W, ICON_W)), "link-2", 12.0, t.text_faint),
+            Indicator::Shape => {
+                icons::paint(ui, r, "pentagon", 13.0, t.icon);
+                let resp = ui.interact(r, ui.id().with(("shape-layer", l.id.0)), Sense::hover()).on_hover_text(tl!("Shape Layer"));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, tl!("Shape Layer")));
+            }
             Indicator::Fx => {
                 if let Some(g) = fx_galley.clone() {
                     painter.galley(pos2(r.left(), cy - g.size().y / 2.0), g, t.text_dim);

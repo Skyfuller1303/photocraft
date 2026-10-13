@@ -9,7 +9,7 @@
 //! - `ui.inspect`: full UI state (tool, panels, views, dialogs, windows, window size); the menu
 //!   tree is `ui.menu.list`
 //! - `ui.set {tool?, panels?, dock?, dockTabs?, dockWidth?, colorPanel?, maskTarget?, vectorMaskTarget?, selectionMode?, zoom?, center?, rotation?, fit?, theme?, brushSection?, brushTab?, brushesView?, brushPicker?, brushPickerName?, brushPickerStroke?, brushPickerTip?, brushPickerScale?, brushSize?}`:
-//!   change UI state; any other field is an error ([`UI_SET_FIELDS`])
+//!   change UI state; any other field is an error ([`ui_set_fields`])
 //! - `ui.dialog.open {kind, fields?}` (kinds: newDocument, about, layerStyle {effect?}, colorPicker {target: foreground|background}, command {command}) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog, wait?}` / `ui.dialog.cancel {dialog}`
 //! - `ui.dialog.apply {dialog}`: commit Preferences changes without closing the dialog
 //! - `ui.window.open {document?}` / `ui.window.close {window}`: extra document windows
@@ -127,7 +127,8 @@ pub enum Outcome {
     AfterJob(photocraft_engine::jobs::JobId),
 }
 
-/// The fields `ui.set` reads. Anything else is rejected before a field is applied, and every
+/// The core fields `ui.set` reads; [`ui_set_fields`] also includes Shape tool fields.
+/// Anything else is rejected before a field is applied, and every
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
@@ -173,6 +174,13 @@ pub const UI_SET_FIELDS: [&str; 35] = [
 /// feeds in its own frame before replying, so `count` sizes both the input queue and the wait;
 /// the same ceiling as the steps of one batch request.
 pub const MAX_CLICKS: u64 = 256;
+
+const SHAPE_UI_SET_FIELDS: [&str; 3] = ["shapeOptions", "shapeFillPaint", "shapeStrokePaint"];
+
+/// Every accepted field, including independent Shape defaults and the core controls.
+pub fn ui_set_fields() -> impl Iterator<Item = &'static str> {
+    UI_SET_FIELDS.into_iter().chain(SHAPE_UI_SET_FIELDS)
+}
 
 fn ok(v: Value) -> Outcome {
     Outcome::Done(json!({"ok": true, "result": v}))
@@ -455,8 +463,8 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         "ui.menu.list" => ok(serde_json::to_value(crate::menus::menu_items(app)).unwrap_or_default()),
         "ui.inspect" => ok(inspect(app, ctx)),
         "ui.set" => {
-            if let Some(field) = p.as_object().and_then(|o| o.keys().find(|k| !UI_SET_FIELDS.contains(&k.as_str()))) {
-                return err(format!("unknown field `{field}` (fields: {})", UI_SET_FIELDS.join(", ")));
+            if let Some(field) = p.as_object().and_then(|o| o.keys().find(|k| !ui_set_fields().any(|allowed| allowed == k.as_str()))) {
+                return err(format!("unknown field `{field}` (fields: {})", ui_set_fields().collect::<Vec<_>>().join(", ")));
             }
             let gradient_blend = if let Some(value) = p.get("gradientBlendMode") {
                 let Some(name) = value.as_str() else { return err("gradientBlendMode must be a blend mode name") };
@@ -480,7 +488,13 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                             }
                         }
                         let o = &app.ui.tool_options;
-                        let base = o.shape_stroke.stroke(o.stroke_width, photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK));
+                        let base = o.shape_stroke.stroke(
+                            o.stroke_width,
+                            o.shape_stroke_paint.clone().unwrap_or_else(|| {
+                                let c = crate::shape_options::stroke_color(app);
+                                photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(c[0], c[1], c[2], c[3]))
+                            }),
+                        );
                         Some(photocraft_engine::vector_cmds::parse_stroke(v, Some(base), photocraft_doc::Color::BLACK)?)
                     }
                     None => None,
@@ -534,6 +548,21 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 };
                 // The Crop tool's gear menu: Show Cropped Area and the shield (#1919).
                 let crop_shield = merged_object(&app.ui.tool_options.crop_shield, p.get("cropShield"), "cropShield")?;
+                let mut shape_patch = p.get("shapeOptions").cloned();
+                if let Some(patch) = shape_patch.as_mut() {
+                    let heads = merged_object(&app.ui.tool_options.shape.arrowheads, patch.get("arrowheads"), "shapeOptions.arrowheads")?;
+                    if let Some(heads) = heads {
+                        patch["arrowheads"] = serde_json::to_value(heads).map_err(|e| e.to_string())?;
+                    }
+                }
+                let shape_options = merged_object(&app.ui.tool_options.shape, shape_patch.as_ref(), "shapeOptions")?;
+                if let Some(o) = &shape_options {
+                    o.validate()?;
+                }
+                let shape_fill_paint =
+                    p.get("shapeFillPaint").map(|v| photocraft_engine::vector_cmds::shape_fill(&app.session, v)).transpose().map_err(|e| e.to_string())?;
+                let shape_stroke_paint =
+                    p.get("shapeStrokePaint").map(|v| photocraft_engine::vector_cmds::shape_fill(&app.session, v)).transpose().map_err(|e| e.to_string())?;
                 if crop_shield.as_ref().is_some_and(|s| !(0.0..=100.0).contains(&s.opacity)) {
                     return Err("cropShield.opacity must be 0..100".into());
                 }
@@ -641,6 +670,20 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                         app.ui.tool_options.stroke_width = 0.0;
                     }
                 }
+                if let Some(fill) = shape_fill_paint {
+                    app.ui.tool_options.shape_fill = fill.is_some();
+                    app.ui.tool_options.shape_fill_paint = fill;
+                }
+                if let Some(paint) = shape_stroke_paint {
+                    app.ui.tool_options.stroke_width = if paint.is_none() {
+                        0.0
+                    } else if app.ui.tool_options.stroke_width <= 0.0 {
+                        3.0
+                    } else {
+                        app.ui.tool_options.stroke_width
+                    };
+                    app.ui.tool_options.shape_stroke_paint = paint;
+                }
                 if let Some(t) = tool {
                     app.ui.tool = t;
                     // Each tool keeps its own brush (#218), so switch it in before `brushSize`
@@ -707,6 +750,10 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(v) = dock_tabs {
                     app.ui.dock_tabs = v;
+                }
+                if let Some(mut o) = shape_options {
+                    o.path_geometry = app.ui.tool_options.shape.path_geometry.clone();
+                    app.ui.tool_options.shape = o;
                 }
                 // Dock group order, heights and collapsed groups (see `dock::DockLayout`).
                 if let Some(v) = dock {
@@ -1075,6 +1122,13 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(d) = app.drag.as_mut().filter(|d| crate::hold_keys::repositions(d.tool)) {
                     d.reposition = space;
+                }
+                if !space
+                    && app.ui.transform.is_none()
+                    && matches!(ev, ToolEvent::Down { .. })
+                    && let Some(xf) = crate::canvas::ViewXform::active(app)
+                {
+                    crate::canvas::begin_transform_controls_at(app, ctx, &xf, xf.to_screen(x as f32, y as f32));
                 }
                 // A Crop drag in the default mode turns and pans the view with the image: its
                 // points are read as the view showed them at the press (`crop_mode`).
@@ -1906,7 +1960,7 @@ mod tests {
         assert_eq!(app.ui.theme, ThemeKind::StudioLight);
         assert_eq!(app.ui.tool, Tool::Brush, "a rejected call applies none of its fields");
         // Every field the method reads gets past the check (a bad value is its own error).
-        for field in UI_SET_FIELDS {
+        for field in ui_set_fields() {
             let r = call(&mut app, &ctx, "ui.set", json!({ field: null }));
             assert!(!r.to_string().contains("unknown field"), "{field}: {r}");
         }

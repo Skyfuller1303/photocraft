@@ -23,6 +23,33 @@
 # out of noun agreement ("Broj: {n}", "slojeva: {n}") so every number reads correctly.
 
 # Guide layout dialog
+# PR #3446 shape/paint labels (kept before shared catalog entries)
+	Align Edges	Poravnaj ivice
+	Align to Canvas	Poravnaj sa platnom
+	Arrowheads	Vrhovi strelica
+	Bring Shape Forward	Pomeri oblik napred
+	Bring Shape to Front	Postavi oblik u prvi plan
+	Color opacity	Neprozirnost boje
+	Concavity:	Udubljenost:
+	Constrain Proportions	Zadrži proporcije
+	Distribute Horizontally	Rasporedi horizontalno
+	Distribute Vertically	Rasporedi vertikalno
+	End	Kraj
+	No recent colors	Nema nedavnih boja
+	Path Alignment	Poravnanje putanje
+	Path Arrangement	Redosled putanja
+	Path Operations	Operacije sa putanjama
+	Path Options	Opcije putanje
+	Proportional	Proporcionalno
+	Recent Colors	Nedavne boje
+	Send Shape Backward	Pomeri oblik unazad
+	Send Shape to Back	Postavi oblik u pozadinu
+	Show Path	Prikaži putanju
+	Smooth Indents	Zagladi udubljenja
+	Start	Početak
+	Stop opacity	Neprozirnost tačke
+	Unconstrained	Bez ograničenja
+
 	Rows	Redovi
 	Number	Broj
 	Margin	Margina

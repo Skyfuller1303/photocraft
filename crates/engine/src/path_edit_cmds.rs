@@ -46,7 +46,7 @@ fn knot(cmd: &str, p: &Value) -> Result<[usize; 2]> {
 }
 
 /// Applies `f` to the targeted path in one undoable step labelled `label`.
-fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(&mut Path) -> std::result::Result<(), String>) -> Result<Value> {
+pub(crate) fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(&mut Path) -> std::result::Result<(), String>) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).unwrap_or("work").to_owned();
     let layer = if name == "layer" { Some(layer_id(s, p)?) } else { None };
     let shape = layer.filter(|id| s.active().and_then(|d| d.doc.layer(*id)).is_some_and(|l| matches!(l.content, LayerContent::Shape(_))));

@@ -152,6 +152,7 @@
 	Duplicate	Δημιουργία αντιγράφου
 	Rename	Μετονομασία
 	Opacity	Αδιαφάνεια
+	Stop opacity	Αδιαφάνεια σημείου
 	Fill	Γέμισμα
 	Layers	Επίπεδα
 	Channels	Κανάλια
@@ -3284,6 +3285,23 @@
 	↑↓ navigate   {key} run   esc close	↑↓ πλοήγηση   {key} εκτέλεση   Esc κλείσιμο
 	↑↓ navigate   ↵ run   esc close	↑↓ πλοήγηση   ↵ εκτέλεση   esc κλείσιμο
 @plural	Group · {n} layer|Group · {n} layers	Ομάδα · {n} επίπεδο|Ομάδα · {n} επίπεδα
+
+# Plural status messages (complete catalog coverage)
+@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	Εξήχθη {n} δείγμα χρώματος στο {file}|Εξήχθησαν {n} δείγματα χρωμάτων στο {file}
+@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	Εισήχθη {n} πινέλο από την ομάδα {group}|Εισήχθησαν {n} πινέλα από την ομάδα {group}
+@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	Εισήχθη {n} δείγμα χρώματος από το {file}|Εισήχθησαν {n} δείγματα χρωμάτων από το {file}
+@plural	Played {n} step|Played {n} steps	Αναπαράχθηκε {n} βήμα|Αναπαράχθηκαν {n} βήματα
+@plural	Saved for Web: {n} file|Saved for Web: {n} files	Αποθήκευση για Web: {n} αρχείο|Αποθήκευση για Web: {n} αρχεία
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	Ενημερώθηκε {n} συνδεδεμένο έξυπνο αντικείμενο που άλλαξε στον δίσκο|Ενημερώθηκαν {n} συνδεδεμένα έξυπνα αντικείμενα που άλλαξαν στον δίσκο
+@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	Διαγράφηκε {n} επίπεδο που καταγράφει αυτή η σύνθεση. Ενημερώστε τη σύνθεση ή καταργήστε την προειδοποίηση.|Διαγράφηκαν {n} επίπεδα που καταγράφει αυτή η σύνθεση. Ενημερώστε τη σύνθεση ή καταργήστε την προειδοποίηση.
+@plural	{n} plane|{n} planes	{n} επίπεδο προοπτικής|{n} επίπεδα προοπτικής
+@plural	{n} preset|{n} presets	{n} προεπιλογή|{n} προεπιλογές
+@plural	{n} sample point removed|{n} sample points removed	Αφαιρέθηκε {n} σημείο δειγματοληψίας|Αφαιρέθηκαν {n} σημεία δειγματοληψίας
+@plural	{n} slice|{n} slices	{n} τομή|{n} τομές
+@plural	{n} step|{n} steps	{n} βήμα|{n} βήματα
+@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} ακόμη προειδοποίηση προεπιλογών πινέλων)|{warning} (+{n} ακόμη προειδοποιήσεις προεπιλογών πινέλων)
+@plural	{what} with {n} warning|{what} with {n} warnings	{what} με {n} προειδοποίηση|{what} με {n} προειδοποιήσεις
+
 @plural	{n} Layer|{n} Layers	{n} επίπεδο|{n} επίπεδα
 @plural	{n} item|{n} items	{n} στοιχείο|{n} στοιχεία
 @plural	{n} layer|{n} layers	{n} επίπεδο|{n} επίπεδα
@@ -3668,6 +3686,32 @@ fontWeight	Thin	Πολύ λεπτά
 	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
 	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο
 	No subject found — try a rectangle around the object	Δεν βρέθηκε θέμα — δοκιμάστε ένα ορθογώνιο γύρω από το αντικείμενο
+	W	Π
+	H	Υ
+	Align to Canvas	Στοίχιση στον καμβά
+	Arrowheads	Αιχμές βελών
+	Bring Shape Forward	Μεταφορά σχήματος εμπρός
+	Bring Shape to Front	Μεταφορά σχήματος στο προσκήνιο
+	Constrain Proportions	Διατήρηση αναλογιών
+	Distribute Horizontally	Οριζόντια κατανομή
+	Distribute Vertically	Κατακόρυφη κατανομή
+	End	Τέλος
+	Path Alignment	Στοίχιση διαδρομών
+	Path Arrangement	Σειρά διαδρομών
+	Path Operations	Λειτουργίες διαδρομής
+	Path Options	Επιλογές διαδρομής
+	Send Shape Backward	Μεταφορά σχήματος πίσω
+	Send Shape to Back	Μεταφορά σχήματος στο παρασκήνιο
+	Show Path	Εμφάνιση διαδρομής
+	Start	Αρχή
+	Align Edges	Ευθυγράμμιση άκρων
+	Unconstrained	Χωρίς περιορισμούς
+	Proportional	Αναλογικό
+	Smooth Indents	Ομαλές εσοχές
+	Concavity:	Κοιλότητα:
+	Recent Colors	Πρόσφατα χρώματα
+	No recent colors	Δεν υπάρχουν πρόσφατα χρώματα
+	Color opacity	Αδιαφάνεια χρώματος
 	Appearance Settings…	Ρυθμίσεις εμφάνισης…
 	Add to favorites	Προσθήκη στα αγαπημένα
 	Remove from favorites	Αφαίρεση από τα αγαπημένα
@@ -3709,8 +3753,6 @@ cameraData	Lens	Φακός
 	Make Portrait	Κατακόρυφος προσανατολισμός
 	Make Landscape	Οριζόντιος προσανατολισμός
 	Add New Artboard	Προσθήκη νέου πίνακα σχεδίασης
-	W	Π
-	H	Υ
 	Freeform Pen Tool	Πένα ελεύθερης σχεδίασης
 	Curvature Pen Tool	Πένα καμπυλότητας
 	Curve Fit:	Προσαρμογή καμπύλης:
@@ -3783,20 +3825,6 @@ curves	Smooth	Εξομάλυνση
 	The layer or its mask changed. Drag the mask onto the Trash again.	Το επίπεδο ή η μάσκα του άλλαξε. Σύρετε ξανά τη μάσκα στον Κάδο.
 	Delete the vector mask?	Διαγραφή της διανυσματικής μάσκας;
 # Counted status messages and labels (#3454; adapted from PR #3821)
-@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	Εξήχθη {n} δείγμα χρώματος στο {file}|Εξήχθησαν {n} δείγματα χρωμάτων στο {file}
-@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	Εισήχθη {n} πινέλο από την ομάδα {group}|Εισήχθησαν {n} πινέλα από την ομάδα {group}
-@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	Εισήχθη {n} δείγμα χρώματος από το {file}|Εισήχθησαν {n} δείγματα χρωμάτων από το {file}
-@plural	Played {n} step|Played {n} steps	Αναπαράχθηκε {n} βήμα|Αναπαράχθηκαν {n} βήματα
-@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	Ενημερώθηκε {n} συνδεδεμένο έξυπνο αντικείμενο που άλλαξε στον δίσκο|Ενημερώθηκαν {n} συνδεδεμένα έξυπνα αντικείμενα που άλλαξαν στον δίσκο
-@plural	Saved for Web: {n} file|Saved for Web: {n} files	Αποθήκευση για Web: {n} αρχείο|Αποθήκευση για Web: {n} αρχεία
-@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	Διαγράφηκε {n} επίπεδο που καταγράφει αυτή η σύνθεση. Ενημερώστε τη σύνθεση ή καταργήστε την προειδοποίηση.|Διαγράφηκαν {n} επίπεδα που καταγράφει αυτή η σύνθεση. Ενημερώστε τη σύνθεση ή καταργήστε την προειδοποίηση.
-@plural	{n} plane|{n} planes	{n} επίπεδο προοπτικής|{n} επίπεδα προοπτικής
-@plural	{n} preset|{n} presets	{n} προεπιλογή|{n} προεπιλογές
-@plural	{n} sample point removed|{n} sample points removed	Αφαιρέθηκε {n} σημείο δειγματοληψίας|Αφαιρέθηκαν {n} σημεία δειγματοληψίας
-@plural	{n} slice|{n} slices	{n} τομή|{n} τομές
-@plural	{n} step|{n} steps	{n} βήμα|{n} βήματα
-@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} ακόμη προειδοποίηση προεπιλογών πινέλων)|{warning} (+{n} ακόμη προειδοποιήσεις προεπιλογών πινέλων)
-@plural	{what} with {n} warning|{what} with {n} warnings	{what} με {n} προειδοποίηση|{what} με {n} προειδοποιήσεις
 # View › Guides › New Guide… › Color
 	Light Blue	Ανοιχτό μπλε
 	Light Red	Ανοιχτό κόκκινο

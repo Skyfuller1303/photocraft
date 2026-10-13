@@ -1321,6 +1321,7 @@
 	Offset	偏移
 	Only Web Colors	仅 Web 颜色
 	Opacity	不透明度
+	Stop opacity	色标不透明度
 	Opacity Jitter	不透明度抖动
 	Opacity:	不透明度：
 	Open a document to define variables.	打开文档以定义变量。
@@ -2578,6 +2579,36 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	快速选择在该处未找到任何内容
 	Object Selection found nothing there — try a tighter rectangle	对象选择在该处未找到任何内容 — 请尝试更紧凑的矩形
 	No subject found — try a rectangle around the object	未找到主体 — 请尝试在对象周围绘制矩形
+	W	宽
+	H	高
+	Align to Canvas	对齐到画布
+	Arrowheads	箭头
+	Bring Shape Forward	形状前移
+	Bring Shape to Front	形状置于顶层
+	Constrain Proportions	约束比例
+	Distribute Horizontally	水平分布
+	Distribute Vertically	垂直分布
+	End	终点
+	Mask	蒙版
+	New Path	新建路径
+	Path Alignment	路径对齐
+	Path Arrangement	路径排列
+	Path Operations	路径操作
+	Path Options	路径选项
+	Send Shape Backward	形状后移
+	Send Shape to Back	形状置于底层
+	Show Path	显示路径
+	Start	起点
+	Align Edges	对齐边缘
+	Unconstrained	无约束
+	Proportional	比例
+	Smooth Indents	平滑缩进
+	Concavity:	凹度：
+	Solid Color	纯色
+	Color Picker	颜色选择器
+	Recent Colors	最近使用的颜色
+	No recent colors	尚无最近使用的颜色
+	Color opacity	颜色不透明度
 	Auto Erase	自动抹除
 	Click the first point or press {key} to close · {del} removes a point · Esc cancels	点按第一个点或按 {key} 闭合 · {del} 删除一个点 · Esc 取消
 	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	点按，然后沿边缘移动 · 点按固定一个点 · {alt}-点按画直线段 · 双击闭合
@@ -2630,8 +2661,6 @@ cameraData	Lens	镜头
 	Make Portrait	设为纵向
 	Make Landscape	设为横向
 	Add New Artboard	添加新画板
-	W	宽
-	H	高
 	Freeform Pen Tool	自由钢笔工具
 	Curvature Pen Tool	弯度钢笔工具
 	Curve Fit:	曲线拟合：
