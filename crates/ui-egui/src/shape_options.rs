@@ -476,7 +476,7 @@ mod tests {
         assert!(shape(&app, id).live.is_none());
         let id = LayerId(app.run("shape.create", json!({"kind": "line", "from": [10, 20], "to": [110, 20], "weight": 4})).unwrap()["layer"].as_u64().unwrap());
         apply(&mut app, Some(id), Change::Size { height: false, value: 150.0, linked: false }, None).unwrap();
-        assert_eq!(shape(&app, id).live, Some(LiveShape::Line { from: [10.0, 20.0], to: [160.0, 20.0], weight: 4.0 }));
+        assert_eq!(shape(&app, id).live, Some(LiveShape::Line { from: [10.0, 20.0], to: [160.0, 20.0], weight: 4.0, arrowheads: None }));
         assert!(apply(&mut app, Some(id), Change::Size { height: true, value: 50.0, linked: false }, None).is_err());
     }
 

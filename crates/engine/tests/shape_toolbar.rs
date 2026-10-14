@@ -1,4 +1,4 @@
-use photocraft_doc::LayerId;
+use photocraft_doc::{LayerContent, LayerId, LiveShape};
 use photocraft_engine::Session;
 use serde_json::json;
 
@@ -77,6 +77,33 @@ fn pixel_mask_target_and_bad_params_preserve_document_on_failure() {
         assert!(s.execute("shape.drawPixels", params.clone()).is_err(), "{params}");
         assert_eq!(s.active().unwrap().doc, before);
         assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+}
+
+#[test]
+fn rounded_polygons_and_arrowheads_keep_live_properties_and_undo() {
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        let id =
+            s.execute("shape.create", json!({"kind":"star","sides":5,"rect":[5,5,40,30],"cornerRadius":2,"starRatio":0.5})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("shape.edit", json!({"layer":id,"sides":6})).unwrap();
+        let info = s.execute("shape.info", json!({"layer":id})).unwrap();
+        assert_eq!(info["live"]["star_ratio"], 0.5);
+        assert_eq!(info["live"]["corner_radius"], 2.0);
+        s.execute("shape.edit", json!({"layer":id,"cornerRadius":0})).unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(s.execute("shape.edit", json!({"layer":id,"cornerRadius":-1})).is_err());
+        let id = s
+            .execute("shape.create", json!({"kind":"line","from":[5,20],"to":[55,20],"weight":2,"arrowheads":{"start":true,"end":true,"width":10,"length":12}}))
+            .unwrap()["layer"]
+            .as_u64()
+            .unwrap();
+        let LayerContent::Shape(sh) = &s.active().unwrap().doc.layer(LayerId(id)).unwrap().content else { panic!() };
+        assert_eq!(sh.path.subpaths.len(), 1);
+        assert_eq!(sh.path.subpaths[0].knots.len(), 10);
+        assert!(matches!(sh.live, Some(LiveShape::Line { arrowheads: Some(_), .. })));
+        s.execute("shape.edit", json!({"layer":id,"weight":4})).unwrap();
+        assert!(s.execute("shape.edit", json!({"layer":id,"arrowheads":{"width":1e100}})).is_err());
     }
 }
 

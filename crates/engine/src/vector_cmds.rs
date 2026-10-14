@@ -584,6 +584,14 @@ fn live_json(l: &LiveShape) -> Value {
 
 /// Builds a live shape from `kind` + geometry params.
 fn live_from_params(cmd: &str, kind: &str, p: &Value, prev: Option<&LiveShape>) -> Result<LiveShape> {
+    if p.get("smoothIndents").is_some_and(|v| !v.is_boolean()) {
+        return Err(bad(cmd, "smoothIndents must be a boolean"));
+    }
+    if let Some(v) = p.get("cornerRadius")
+        && !v.as_f64().is_some_and(|v| (0.0..=1_000_000.0).contains(&v))
+    {
+        return Err(bad(cmd, "cornerRadius must be a finite number between 0 and 1000000"));
+    }
     let prev_rect = match prev {
         Some(LiveShape::Rect { rect, .. } | LiveShape::Ellipse { rect } | LiveShape::Polygon { rect, .. }) => Some(*rect),
         _ => None,
@@ -612,17 +620,46 @@ fn live_from_params(cmd: &str, kind: &str, p: &Value, prev: Option<&LiveShape>) 
             };
             let sides = f64p(p, "sides").map_or(ps, |v| v.round().clamp(3.0, 100.0) as u32);
             let ratio = f64p(p, "starRatio").map_or(if kind == "star" && pr >= 1.0 { 0.5 } else { pr }, |v| v.clamp(0.01, 1.0));
-            LiveShape::Polygon { rect: rect()?, sides, star_ratio: if kind == "polygon" && f64p(p, "starRatio").is_none() { 1.0 } else { ratio } }
+            LiveShape::Polygon {
+                rect: rect()?,
+                sides,
+                star_ratio: ratio,
+                corner_radius: f64p(p, "cornerRadius").unwrap_or(match prev {
+                    Some(LiveShape::Polygon { corner_radius, .. }) => *corner_radius,
+                    _ => 0.0,
+                }),
+                smooth_indents: p.get("smoothIndents").and_then(Value::as_bool).unwrap_or(match prev {
+                    Some(LiveShape::Polygon { smooth_indents, .. }) => *smooth_indents,
+                    _ => false,
+                }),
+            }
         }
         "line" => {
             let (pf, pto, pw) = match prev {
-                Some(LiveShape::Line { from, to, weight }) => (Some(*from), Some(*to), *weight),
+                Some(LiveShape::Line { from, to, weight, .. }) => (Some(*from), Some(*to), *weight),
                 _ => (None, None, 1.0),
             };
             LiveShape::Line {
                 from: nums::<2>(p, "from").or(pf).ok_or_else(|| bad(cmd, "`from`: [x, y] is required"))?,
                 to: nums::<2>(p, "to").or(pto).ok_or_else(|| bad(cmd, "`to`: [x, y] is required"))?,
                 weight: f64p(p, "weight").unwrap_or(pw).max(0.0),
+                arrowheads: match p.get("arrowheads") {
+                    Some(Value::Null) => None,
+                    Some(v) => {
+                        let a: photocraft_doc::vector::LineArrowheads = serde_json::from_value(v.clone()).map_err(|e| bad(cmd, e.to_string()))?;
+                        if ![a.width, a.length].iter().all(|v| v.is_finite() && (0.0..=10000.0).contains(v)) {
+                            return Err(bad(cmd, "Arrowhead dimensions must be 0..10000"));
+                        }
+                        if !a.concavity.is_finite() || !(-50.0..=50.0).contains(&a.concavity) {
+                            return Err(bad(cmd, "Arrowhead concavity must be -50..50 percent"));
+                        }
+                        Some(a)
+                    }
+                    None => match prev {
+                        Some(LiveShape::Line { arrowheads, .. }) => arrowheads.clone(),
+                        _ => None,
+                    },
+                },
             }
         }
         o => return Err(bad(cmd, format!("unknown kind `{o}`"))),
@@ -699,29 +736,51 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
     sh.path = sh.path.transform(a);
     let [m0, m1, m2, m3, tx, ty] = a.m;
     let axis_aligned = m1.abs() < 1e-12 && m2.abs() < 1e-12 && m0 > 0.0 && m3 > 0.0;
+    let line = |from: [f64; 2], to: [f64; 2], weight: f64, arrowheads: Option<photocraft_doc::vector::LineArrowheads>| {
+        let (sx, sy) = (m0.hypot(m1), m2.hypot(m3));
+        if !sx.is_finite() || !sy.is_finite() || sx <= 0.0 || sy <= 0.0 {
+            return None;
+        }
+        // A zero-length line uses a vertical width fallback, without an orientation
+        // parameter. A quarter turn cannot be reconstructed by its live metadata.
+        if from == to && m0.abs() < 1e-12 && m3.abs() < 1e-12 {
+            return None;
+        }
+        // An anisotropic diagonal bar becomes a sheared parallelogram; a live
+        // line's perpendicular width cannot describe it. Keep the exact path.
+        let dimensions = if sx == sy || (to[1] - from[1]).abs() < 1e-12 {
+            Some((sx, sy))
+        } else if (to[0] - from[0]).abs() < 1e-12 {
+            Some((sy, sx))
+        } else {
+            None
+        };
+        let pt = |p: [f64; 2]| [m0 * p[0] + m2 * p[1] + tx, m1 * p[0] + m3 * p[1] + ty];
+        dimensions.map(|(length_scale, width_scale)| LiveShape::Line {
+            from: pt(from),
+            to: pt(to),
+            weight: weight * width_scale,
+            arrowheads: arrowheads.map(|mut heads| {
+                heads.width *= width_scale;
+                heads.length *= length_scale;
+                heads
+            }),
+        })
+    };
     sh.live = match (sh.live.take(), axis_aligned) {
         (Some(l), true) => {
             let r = |r: [f64; 4]| [r[0] * m0 + tx, r[1] * m3 + ty, r[2] * m0, r[3] * m3];
-            let pt = |p: [f64; 2]| [p[0] * m0 + tx, p[1] * m3 + ty];
-            Some(match l {
+            match l {
                 LiveShape::Rect { rect, radii } => {
                     let k = m0.min(m3);
-                    LiveShape::Rect { rect: r(rect), radii: radii.map(|v| v * k) }
+                    Some(LiveShape::Rect { rect: r(rect), radii: radii.map(|v| v * k) })
                 }
-                LiveShape::Ellipse { rect } => LiveShape::Ellipse { rect: r(rect) },
-                LiveShape::Polygon { rect, sides, star_ratio } => LiveShape::Polygon { rect: r(rect), sides, star_ratio },
-                LiveShape::Line { from, to, weight } => {
-                    // Live-shape edits regenerate the line's filled bar from its parameters.
-                    // Keep the weight in sync with a positive scale of the path, or an
-                    // unchanged endpoint edit unexpectedly restores the old thickness (#3063).
-                    // A line's width scales perpendicular to its direction.
-                    let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
-                    let old_length = dx.hypot(dy);
-                    let new_length = (dx * m0).hypot(dy * m3);
-                    let width_scale = if old_length > 0.0 && new_length > 0.0 { m0 * m3 * old_length / new_length } else { m0.min(m3) };
-                    LiveShape::Line { from: pt(from), to: pt(to), weight: weight * width_scale }
+                LiveShape::Ellipse { rect } => Some(LiveShape::Ellipse { rect: r(rect) }),
+                LiveShape::Polygon { rect, sides, star_ratio, corner_radius, smooth_indents } => {
+                    Some(LiveShape::Polygon { rect: r(rect), sides, star_ratio, corner_radius: corner_radius * m0.min(m3), smooth_indents })
                 }
-            })
+                LiveShape::Line { from, to, weight, arrowheads } => line(from, to, weight, arrowheads),
+            }
         }
         // Flips and 90° turns keep rectangles, ellipses and lines live (Image Rotation): the new
         // live box is the mapped box. Polygons/stars would change orientation, so they don't.
@@ -737,7 +796,7 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
                     Some(LiveShape::Rect { rect: r(rect), radii: radii.map(|v| v * k) })
                 }
                 LiveShape::Ellipse { rect } => Some(LiveShape::Ellipse { rect: r(rect) }),
-                LiveShape::Line { from, to, weight } => Some(LiveShape::Line { from: pt(from), to: pt(to), weight: weight * k }),
+                LiveShape::Line { from, to, weight, arrowheads } => line(from, to, weight, arrowheads),
                 _ => None,
             }
         }
@@ -944,7 +1003,7 @@ fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
             sh.live = None;
             sh.psd_raw = None;
         }
-        let geom_keys = ["kind", "rect", "radii", "radius", "sides", "starRatio", "from", "to", "weight"];
+        let geom_keys = ["kind", "rect", "radii", "radius", "cornerRadius", "sides", "starRatio", "smoothIndents", "from", "to", "weight", "arrowheads"];
         if geom_keys.iter().any(|k| p.get(*k).is_some()) {
             let kind = p.get("kind").and_then(Value::as_str).map(str::to_string).or_else(|| sh.live.as_ref().map(|l| live_kind(l).to_string()));
             let kind = kind.ok_or_else(|| bad(CMD, "this shape has no live-shape parameters; pass `kind` or `path`"))?;
@@ -1923,7 +1982,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Shape Layer",
             ["Layer", "New"],
             leak(format!(
-                r##"{{"kind":"rect|roundedRect|ellipse|polygon|star|line|path"="rect","rect":[x,y,w,h] (rect/roundedRect/ellipse/polygon/star),"radii":[tl,tr,br,bl]|r (roundedRect=10),"sides":3..100=5,"starRatio":0..1 (star=0.5),"from":[x,y],"to":[x,y],"weight":px=1 (line),"path":{{…}} (kind path),{fill}=foreground,{stroke}=none,"name":str?,"addTo":layerId? + "op":"combine|subtract|intersect|exclude" (append to an existing shape layer)}} → shape.info. {PATH_FORM}"##
+                r##"{{"kind":"rect|roundedRect|ellipse|polygon|star|line|path"="rect","rect":[x,y,w,h] (rect/roundedRect/ellipse/polygon/star),"radii":[tl,tr,br,bl]|r (roundedRect=10),"sides":3..100=5,"starRatio":0..1 (star=0.5),"cornerRadius":0..1000000=0,"smoothIndents":bool=false (polygon/star),"arrowheads":{{"start":bool,"end":bool,"width":0..10000,"length":0..10000,"concavity":-50..50=0}}? (line),"from":[x,y],"to":[x,y],"weight":px=1 (line),"path":{{…}} (kind path),{fill}=foreground,{stroke}=none,"name":str?,"addTo":layerId? + "op":"combine|subtract|intersect|exclude" (append to an existing shape layer)}} → shape.info. {PATH_FORM}"##
             )),
             has_doc,
             shape_create
@@ -1933,7 +1992,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Shape",
             [],
             leak(format!(
-                r##"{{"layer":id?,"path":{{…}}? (replaces; drops live shape),"kind":str?,"rect":[x,y,w,h]?,"radii":[tl,tr,br,bl]|r?,"sides":n?,"starRatio":r?,"from":[x,y]?,"to":[x,y]?,"weight":px? (live-shape params regenerate the path),"move":[dx,dy]?,"transform":[a,b,c,d,e,f]?,"op":"combine|…"? + "subpath":index? (default all but the first),"fillRule":"nonzero|evenodd"?,{fill}?,{stroke}? (merged into the current stroke),"name":str?}} → shape.info"##
+                r##"{{"layer":id?,"path":{{…}}? (replaces; drops live shape),"kind":str?,"rect":[x,y,w,h]?,"radii":[tl,tr,br,bl]|r?,"sides":n?,"starRatio":r?,"cornerRadius":r?,"smoothIndents":bool?,"arrowheads":{{"start":bool,"end":bool,"width":px,"length":px,"concavity":-50..50}}|null?,"from":[x,y]?,"to":[x,y]?,"weight":px? (live-shape params regenerate the path),"move":[dx,dy]?,"transform":[a,b,c,d,e,f]?,"op":"combine|…"? + "subpath":index? (default all but the first),"fillRule":"nonzero|evenodd"?,{fill}?,{stroke}? (merged into the current stroke),"name":str?}} → shape.info"##
             )),
             has_layer,
             shape_edit
