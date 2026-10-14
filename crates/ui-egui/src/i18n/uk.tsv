@@ -3261,11 +3261,15 @@ cameraRaw	Masking	Маскування
 	Global Light	Глобальне освітлення
 	Scale Effects	Масштабувати ефекти
 	Constrain Proportions	Зберегти пропорції
+	End	Кінець
 	Path Options	Параметри контуру
 	Show Path	Показати контур
+	Start	Початок
 	Align Edges	Вирівняти краї
 	Unconstrained	Без обмежень
 	Proportional	Пропорційно
+	Smooth Indents	Згладити западини
+	Concavity:	Увігнутість:
 	Solid Color	Суцільний колір
 	Convert to Linked	Перетворити на пов'язаний
 	Replace Contents	Замінити вміст
@@ -3673,6 +3677,7 @@ cameraRaw	Masking	Маскування
 	Quick Selection found nothing there	Швидке виділення нічого тут не знайшло
 	Object Selection found nothing there — try a tighter rectangle	Виділення об'єктів нічого тут не знайшло — спробуйте вужчий прямокутник
 	No subject found — try a rectangle around the object	Об'єкт не знайдено — спробуйте прямокутник навколо об'єкта
+	Arrowheads	Наконечники стрілок
 	Color Picker	Вибір кольору
 	Recent Colors	Нещодавно використані кольори
 	No recent colors	Немає нещодавно використаних кольорів

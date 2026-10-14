@@ -548,7 +548,14 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 };
                 // The Crop tool's gear menu: Show Cropped Area and the shield (#1919).
                 let crop_shield = merged_object(&app.ui.tool_options.crop_shield, p.get("cropShield"), "cropShield")?;
-                let shape_options = merged_object(&app.ui.tool_options.shape, p.get("shapeOptions"), "shapeOptions")?;
+                let mut shape_patch = p.get("shapeOptions").cloned();
+                if let Some(patch) = shape_patch.as_mut() {
+                    let heads = merged_object(&app.ui.tool_options.shape.arrowheads, patch.get("arrowheads"), "shapeOptions.arrowheads")?;
+                    if let Some(heads) = heads {
+                        patch["arrowheads"] = serde_json::to_value(heads).map_err(|e| e.to_string())?;
+                    }
+                }
+                let shape_options = merged_object(&app.ui.tool_options.shape, shape_patch.as_ref(), "shapeOptions")?;
                 if let Some(o) = &shape_options {
                     o.validate()?;
                 }

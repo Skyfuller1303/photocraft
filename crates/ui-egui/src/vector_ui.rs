@@ -75,6 +75,26 @@ pub(crate) fn shape_geometry(app: &PhotocraftApp, tool: Tool, start: [f64; 2], e
     if !start.iter().chain(end.iter()).all(|v| v.is_finite()) || o.shape.validate().is_err() {
         return None;
     }
+    let live = crate::shape_options::drawing_live(app);
+    let radius = match &live {
+        Some(photocraft_doc::LiveShape::Rect { radii, .. }) if tool == Tool::Rectangle => radii[0],
+        Some(photocraft_doc::LiveShape::Polygon { corner_radius, .. }) if matches!(tool, Tool::Triangle | Tool::Polygon) => *corner_radius,
+        _ => f64::from(o.corner_radius),
+    };
+    let sides = match &live {
+        Some(photocraft_doc::LiveShape::Polygon { sides, .. }) if tool == Tool::Polygon => *sides,
+        _ => o.polygon_sides,
+    };
+    let (star_ratio, smooth_indents) = match &live {
+        Some(photocraft_doc::LiveShape::Polygon { star_ratio, smooth_indents, .. }) if tool == Tool::Polygon => (*star_ratio, *smooth_indents),
+        _ => (o.shape.star_ratio, o.shape.smooth_indents),
+    };
+    let (weight, heads) = match &live {
+        Some(photocraft_doc::LiveShape::Line { weight, arrowheads, .. }) if tool == Tool::Line => {
+            (*weight, arrowheads.clone().unwrap_or_else(|| photocraft_doc::vector::LineArrowheads { start: false, end: false, ..o.shape.arrowheads.clone() }))
+        }
+        _ => (f64::from(o.line_weight), o.shape.arrowheads.clone()),
+    };
     Some(if tool == Tool::Line {
         let (mut dx, mut dy) = (end[0] - start[0], end[1] - start[1]);
         if mods.shift || o.shape.constrain {
@@ -88,7 +108,7 @@ pub(crate) fn shape_geometry(app: &PhotocraftApp, tool: Tool, start: [f64; 2], e
         }
         let snap = |p: [f64; 2]| if o.shape.align_edges { p.map(f64::round) } else { p };
         let from = snap(if mods.alt || o.shape.from_center { [start[0] - dx, start[1] - dy] } else { start });
-        json!({"kind": "line", "from": from, "to": snap([start[0] + dx, start[1] + dy]), "weight": o.line_weight.max(1.0)})
+        json!({"kind": "line", "from": from, "to": snap([start[0] + dx, start[1] + dy]), "weight": weight,"arrowheads":heads})
     } else {
         let (mut w, mut h) = (end[0] - start[0], end[1] - start[1]);
         let center = mods.alt || o.shape.from_center;
@@ -112,11 +132,11 @@ pub(crate) fn shape_geometry(app: &PhotocraftApp, tool: Tool, start: [f64; 2], e
             return None;
         }
         match tool {
-            Tool::Rectangle if o.corner_radius > 0.0 => json!({"kind": "roundedRect", "rect": rect, "radii": vec![o.corner_radius; 4]}),
+            Tool::Rectangle if radius > 0.0 => json!({"kind": "roundedRect", "rect": rect, "radii": vec![radius; 4]}),
             Tool::Rectangle | Tool::CustomShape => json!({"kind": "rect", "rect": rect}),
             Tool::EllipseShape => json!({"kind": "ellipse", "rect": rect}),
-            Tool::Triangle => json!({"kind": "polygon", "rect": rect, "sides": 3}),
-            _ => json!({"kind": "polygon", "rect": rect, "sides": o.polygon_sides.max(3)}),
+            Tool::Triangle => json!({"kind": "polygon", "rect": rect, "sides": 3, "cornerRadius": radius}),
+            _ => json!({"kind": "polygon", "rect": rect, "sides": sides.max(3), "cornerRadius": radius, "starRatio":star_ratio,"smoothIndents":smooth_indents}),
         }
     })
 }
@@ -1335,7 +1355,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                     });
                 }
             }
-            photocraft_doc::vector::LiveShape::Polygon { sides, star_ratio, .. } => {
+            photocraft_doc::vector::LiveShape::Polygon { sides, star_ratio, smooth_indents, .. } => {
                 ui.horizontal(|ui| {
                     let mut n = *sides as f32;
                     if num(ui, tl!("Sides"), &mut n, 3.0..=100.0, "") {
@@ -1344,6 +1364,10 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                     let mut sr = (*star_ratio * 100.0) as f32;
                     if num(ui, tl!("Star ratio"), &mut sr, 1.0..=100.0, "%") {
                         edit = Some(json!({"starRatio": sr as f64 / 100.0, "coalesce": key("star")}));
+                    }
+                    let mut smooth = *smooth_indents;
+                    if ui.checkbox(&mut smooth, tl!("Smooth Indents")).changed() {
+                        edit = Some(json!({"smoothIndents":smooth,"coalesce":key("smooth-indents")}));
                     }
                 })
                 .inner

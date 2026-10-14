@@ -2971,12 +2971,17 @@ fontWeight	Italic	Miring
 	Quick Selection found nothing there	Seleksi Cepat tidak menemukan apa pun di sana
 	Object Selection found nothing there — try a tighter rectangle	Seleksi Objek tidak menemukan apa pun di sana — coba persegi panjang yang lebih rapat
 	No subject found — try a rectangle around the object	Subjek tidak ditemukan — coba persegi panjang di sekitar objek
+	Arrowheads	Kepala Panah
 	Constrain Proportions	Pertahankan Proporsi
+	End	Akhir
 	Path Options	Opsi Jalur
 	Show Path	Tampilkan Jalur
+	Start	Awal
 	Align Edges	Sejajarkan Tepi
 	Unconstrained	Tanpa Batasan
 	Proportional	Proporsional
+	Smooth Indents	Haluskan Lekukan
+	Concavity:	Kecekungan:
 	Solid Color	Warna solid
 	Color Picker	Pemilih warna
 	Recent Colors	Warna yang baru digunakan

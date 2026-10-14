@@ -2633,12 +2633,17 @@ cameraData	Lens	镜头
 	Add New Artboard	添加新画板
 	W	宽
 	H	高
+	Arrowheads	箭头
 	Constrain Proportions	约束比例
+	End	终点
 	Path Options	路径选项
 	Show Path	显示路径
+	Start	起点
 	Align Edges	对齐边缘
 	Unconstrained	无约束
 	Proportional	比例
+	Smooth Indents	平滑缩进
+	Concavity:	凹度：
 	Mask	蒙版
 	Solid Color	纯色
 	Color Picker	颜色选择器

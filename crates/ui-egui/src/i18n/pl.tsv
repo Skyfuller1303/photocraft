@@ -3077,11 +3077,15 @@ cameraRaw	Roughness	Chropowatość
 	Global Light	Światło globalne
 	Scale Effects	Skaluj efekty
 	Constrain Proportions	Zachowaj proporcje
+	End	Koniec
 	Path Options	Opcje ścieżki
 	Show Path	Pokaż ścieżkę
+	Start	Początek
 	Align Edges	Wyrównaj krawędzie
 	Unconstrained	Bez ograniczeń
 	Proportional	Proporcjonalny
+	Smooth Indents	Wygładź wcięcia
+	Concavity:	Wklęsłość:
 	Solid Color	Jednolity kolor
 	Convert to Linked	Konwertuj na połączony
 	Replace Contents	Zamień zawartość
@@ -3587,6 +3591,7 @@ cameraRaw	Roughness	Chropowatość
 	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
 	No subject found — try a rectangle around the object	Nie znaleziono obiektu — spróbuj prostokąta wokół obiektu
+	Arrowheads	Groty strzałek
 	Color Picker	Próbnik kolorów
 	Recent Colors	Ostatnio używane kolory
 	No recent colors	Brak ostatnio używanych kolorów

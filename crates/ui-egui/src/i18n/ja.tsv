@@ -3157,11 +3157,15 @@ fontWeight	Italic	斜体
 	Sharpen Masking	シャープのマスク
 	Sharpen Radius	シャープの半径
 	Constrain Proportions	縦横比を固定
+	End	終点
 	Path Options	パスオプション
 	Show Path	パスを表示
+	Start	始点
 	Align Edges	エッジを整列
 	Unconstrained	制約なし
 	Proportional	縦横比を指定
+	Smooth Indents	くぼみを滑らかに
+	Concavity:	凹み:
 	Solid Color	べた塗り
 	Source Layer	ソースレイヤー
 	Spacing:	間隔:
@@ -3585,6 +3589,7 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
 	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください
 	No subject found — try a rectangle around the object	被写体が見つかりません — オブジェクトを囲む長方形を試してください
+	Arrowheads	矢印の先端
 	Color Picker	カラーピッカー
 	Recent Colors	最近使った色
 	No recent colors	最近使った色はありません

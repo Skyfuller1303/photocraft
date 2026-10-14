@@ -17,6 +17,8 @@
 # singular noun in Hungarian, so every @plural entry has a single form.
 
 	Color opacity	Szín átlátszatlansága
+	Concavity:	Homorúság:
+	End	Vége
 	No recent colors	Nincsenek legutóbbi színek
 	Recent Colors	Legutóbbi színek
 	Stop opacity	Pont átlátszatlansága
@@ -1332,9 +1334,12 @@
 	Soft	Lágy
 	Solid	Folytonos
 	Align Edges	Élek igazítása
+	Arrowheads	Nyílhegyek
 	Path Options	Útvonal beállításai
 	Proportional	Arányos
 	Show Path	Útvonal megjelenítése
+	Smooth Indents	Bemélyedések simítása
+	Start	Kezdete
 	Unconstrained	Korlátozás nélkül
 	Constrain Proportions	Arányok megtartása
 	Solid Color	Egyszínű

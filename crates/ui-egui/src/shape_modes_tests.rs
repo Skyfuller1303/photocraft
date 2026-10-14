@@ -1,6 +1,5 @@
 use super::*;
 use egui_kittest::{Harness, kittest::Queryable};
-use photocraft_doc::LiveShape;
 
 fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -104,6 +103,34 @@ fn drawing_uses_the_active_shapes_displayed_fill_and_complete_stroke() {
 }
 
 #[test]
+fn drawing_inherits_displayed_live_geometry_in_shape_and_path_modes() {
+    for mode in ["shape", "path"] {
+        let mut a = app();
+        a.ui.tool_options.shape.mode = mode.into();
+        a.ui.tool_options.polygon_sides = 8;
+        a.ui.tool_options.corner_radius = 7.0;
+        draw(&mut a, Tool::Polygon);
+        a.ui.tool_options.polygon_sides = 5;
+        a.ui.tool_options.corner_radius = 0.0;
+        crate::shape_dialog::open(&mut a, Tool::Polygon, [10.0, 10.0]).unwrap();
+        let dialog = a.ui.dialogs.last().unwrap();
+        assert_eq!(dialog.fields["sides"], 8);
+        assert_eq!(dialog.fields["cornerRadius"], 7.0);
+        a.ui.dialogs.clear();
+        draw(&mut a, Tool::Polygon);
+        assert!(matches!(crate::shape_options::drawing_live(&a), Some(LiveShape::Polygon { sides: 8, corner_radius: 7.0, .. })));
+
+        a.ui.tool_options.line_weight = 9.0;
+        a.ui.tool_options.shape.arrowheads.end = true;
+        draw(&mut a, Tool::Line);
+        a.ui.tool_options.line_weight = 1.0;
+        a.ui.tool_options.shape.arrowheads.end = false;
+        draw(&mut a, Tool::Line);
+        assert!(matches!(crate::shape_options::drawing_live(&a), Some(LiveShape::Line { weight:9.0, arrowheads:Some(h), .. }) if h.end));
+    }
+}
+
+#[test]
 fn path_conversion_buttons_make_selection_mask_and_shape() {
     let mut a = app();
     a.ui.tool_options.shape.mode = "path".into();
@@ -130,22 +157,23 @@ fn path_shape_options_edit_live_geometry_but_never_a_different_document() {
     let mut a = app();
     a.ui.tool_options.shape.mode = "path".into();
     a.ui.tool_options.corner_radius = 4.0;
-    draw(&mut a, Tool::Rectangle);
-    assert!(matches!(path_shape(&a).unwrap().live, Some(LiveShape::Rect { radii: [4.0, 4.0, 4.0, 4.0], .. })));
-    edit_path(&mut a, json!({"radii":9,"rect":[20,20,120,70]})).unwrap();
-    assert!(matches!(path_shape(&a).unwrap().live, Some(LiveShape::Rect { radii: [9.0, 9.0, 9.0, 9.0], rect: [20.0, 20.0, 120.0, 70.0] })));
+    draw(&mut a, Tool::Triangle);
+    assert!(matches!(path_shape(&a).unwrap().live, Some(LiveShape::Polygon { corner_radius: 4.0, sides: 3, .. })));
+    edit_path(&mut a, json!({"cornerRadius":9,"rect":[20,20,120,70]})).unwrap();
+    assert!(matches!(path_shape(&a).unwrap().live, Some(LiveShape::Polygon { corner_radius: 9.0, .. })));
     let path = a.session.active().unwrap().doc.work_path.clone().unwrap();
     a.run("file.new", json!({"width":200,"height":160})).unwrap();
     a.run("path.set", json!({"path":photocraft_engine::vector_cmds::path_json(&path)})).unwrap();
     assert!(path_shape(&a).unwrap().live.is_none());
-    assert!(edit_path(&mut a, json!({"radii":2})).is_err());
+    assert!(edit_path(&mut a, json!({"cornerRadius":2})).is_err());
 }
 
 #[test]
-fn path_options_change_view_only() {
+fn path_options_change_view_only_and_line_end_edits_change_active_shape() {
     let mut a = app();
     draw(&mut a, Tool::Line);
     let before = a.session.active().unwrap().doc.clone();
+    let history = a.session.active().unwrap().history.past_len();
     let mut h = harness(a);
     h.get_by_label("Path Options").click();
     h.run_steps(3);
@@ -153,6 +181,12 @@ fn path_options_change_view_only() {
     h.run_steps(3);
     assert!(!h.state().ui.tool_options.shape.show_path);
     assert_eq!(h.state().session.active().unwrap().doc, before);
+    h.get_by_label("End").click();
+    h.run_steps(3);
+    let st = h.state().session.active().unwrap();
+    assert_eq!(st.history.past_len(), history + 1);
+    let LayerContent::Shape(sh) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!() };
+    assert!(matches!(&sh.live,Some(LiveShape::Line{arrowheads:Some(a),..}) if a.end));
 }
 
 #[test]
@@ -166,15 +200,21 @@ fn control_shape_options_validate_before_applying_any_field() {
     call(&mut a, json!({"shapeOptions":{"mode":"pixels","opacity":25,"pathWidth":3}}));
     assert_eq!(a.ui.tool_options.shape.mode, "pixels");
     assert_eq!(a.ui.tool_options.shape.opacity, 25.0);
+    call(&mut a, json!({"shapeOptions":{"arrowheads":{"end":true}}}));
+    assert!(a.ui.tool_options.shape.arrowheads.end);
+    assert_eq!(a.ui.tool_options.shape.arrowheads.width, 10.0);
     let before = a.ui.clone();
     for p in [
         json!({"tool":"polygon","shapeOptions":{"mode":"bad"}}),
         json!({"tool":"polygon","shapeOptions":{"opacity":-1}}),
         json!({"tool":"polygon","shapeOptions":{"pathWidth":1e100}}),
         json!({"tool":"polygon","shapeOptions":{"unknown":true}}),
+        json!({"tool":"polygon","shapeOptions":{"arrowheads":{"unknown":true}}}),
         json!({"tool":"polygon","shapeOptions":{"sizeMode":"bad"}}),
         json!({"tool":"polygon","shapeOptions":{"sizeWidth":0}}),
         json!({"tool":"polygon","shapeOptions":{"sizeHeight":300001}}),
+        json!({"tool":"polygon","shapeOptions":{"starRatio":0}}),
+        json!({"tool":"polygon","shapeOptions":{"arrowheads":{"concavity":51}}}),
     ] {
         call(&mut a, p);
         assert_eq!(a.ui, before);
@@ -222,6 +262,8 @@ fn align_edges_is_view_state_and_old_preferences_load_defaults() {
     let old: ShapeToolOptions = serde_json::from_value(json!({"mode":"path","fromCenter":true})).unwrap();
     assert_eq!(old.size_mode, "unconstrained");
     assert!(old.align_edges);
+    assert_eq!(old.star_ratio, 1.0);
+    assert!(!old.smooth_indents);
 }
 
 #[test]
@@ -261,4 +303,12 @@ fn full_paint_defaults_are_atomic_view_state_and_seed_new_shapes() {
     let LayerContent::Shape(shape) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!() };
     assert_eq!(shape.fill, options.shape_fill_paint);
     assert_eq!(shape.stroke.as_ref().unwrap().paint, options.shape_stroke_paint.unwrap());
+}
+
+#[test]
+fn thin_lines_keep_their_weight() {
+    let mut a = app();
+    a.run("shape.create", json!({"kind":"line","from":[10,20],"to":[80,20],"weight":0.5,"fill":"#ff0000"})).unwrap();
+    let geometry = crate::vector_ui::shape_geometry(&a, Tool::Line, [10.0, 40.0], [80.0, 40.0], egui::Modifiers::NONE).unwrap();
+    assert_eq!(geometry["weight"], 0.5);
 }

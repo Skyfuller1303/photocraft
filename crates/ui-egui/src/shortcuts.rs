@@ -400,6 +400,9 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if crate::distort_ui::keys(app, ctx) {
         return;
     }
+    if crate::shape_canvas::keys(app, ctx) {
+        return;
+    }
     // Free Transform: ↩ commits, Esc cancels.
     if app.ui.transform.is_some() {
         if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {

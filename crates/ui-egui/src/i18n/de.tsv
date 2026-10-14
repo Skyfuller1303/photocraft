@@ -2608,12 +2608,17 @@ fontWeight	Italic	Kursiv
 	Quick Selection found nothing there	Die Schnellauswahl hat dort nichts gefunden
 	Object Selection found nothing there — try a tighter rectangle	Die Objektauswahl hat dort nichts gefunden — versuchen Sie ein engeres Rechteck
 	No subject found — try a rectangle around the object	Kein Motiv gefunden — versuchen Sie ein Rechteck um das Objekt
+	Arrowheads	Pfeilspitzen
 	Constrain Proportions	Proportionen beibehalten
+	End	Ende
 	Path Options	Pfadoptionen
 	Show Path	Pfad anzeigen
+	Start	Anfang
 	Align Edges	Kanten ausrichten
 	Unconstrained	Unbeschränkt
 	Proportional	Proportional
+	Smooth Indents	Einbuchtungen glätten
+	Concavity:	Einbuchtung:
 	Solid Color	Volltonfarbe
 	Color Picker	Farbwähler
 	Recent Colors	Zuletzt verwendete Farben

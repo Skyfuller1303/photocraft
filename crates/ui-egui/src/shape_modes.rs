@@ -1,6 +1,6 @@
 //! Shape-tool modes, path actions and view-only path display options.
 use crate::{PhotocraftApp, state::Tool};
-use photocraft_doc::{LayerContent, Path, ShapeLayer};
+use photocraft_doc::{LayerContent, LiveShape, Path, ShapeLayer};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -20,6 +20,9 @@ pub struct ShapeToolOptions {
     pub size_width: f64,
     pub size_height: f64,
     pub align_edges: bool,
+    pub star_ratio: f64,
+    pub smooth_indents: bool,
+    pub arrowheads: photocraft_doc::vector::LineArrowheads,
     #[serde(skip)]
     pub path_geometry: Option<(u64, Value, Path)>,
 }
@@ -39,6 +42,9 @@ impl Default for ShapeToolOptions {
             size_width: 100.0,
             size_height: 100.0,
             align_edges: true,
+            star_ratio: 1.0,
+            smooth_indents: false,
+            arrowheads: photocraft_doc::vector::LineArrowheads { width: 10.0, length: 20.0, ..Default::default() },
             path_geometry: None,
         }
     }
@@ -53,7 +59,10 @@ impl ShapeToolOptions {
         }
         if !(0.0..=100.0).contains(&self.opacity)
             || !(0.5..=10.0).contains(&self.path_width)
+            || ![self.arrowheads.width, self.arrowheads.length].iter().all(|v| (0.0..=10000.0).contains(v))
+            || !(-50.0..=50.0).contains(&self.arrowheads.concavity)
             || ![self.size_width, self.size_height].iter().all(|v| (1.0..=300000.0).contains(v))
+            || !(0.01..=1.0).contains(&self.star_ratio)
         {
             return Err("Shape options contain invalid numeric values".into());
         }
@@ -199,6 +208,35 @@ pub(crate) fn actions(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
 }
 
 fn options_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
+    let shape = if app.ui.tool_options.shape.mode == "path" {
+        path_shape(app)
+    } else if app.ui.tool_options.shape.mode == "shape" && !app.ui.mask_target && !app.ui.vector_mask_target {
+        crate::vector_ui::active_shape_path(app).and_then(|(id, _)| app.session.active()?.doc.layer(photocraft_doc::LayerId(id))).and_then(|l| {
+            match &l.content {
+                LayerContent::Shape(sh) => Some(sh.clone()),
+                _ => None,
+            }
+        })
+    } else {
+        None
+    };
+    let live_heads = shape.as_ref().and_then(|s| match &s.live {
+        Some(LiveShape::Line { arrowheads, .. }) => Some(arrowheads.clone().unwrap_or_else(|| photocraft_doc::vector::LineArrowheads {
+            start: false,
+            end: false,
+            ..app.ui.tool_options.shape.arrowheads.clone()
+        })),
+        _ => None,
+    });
+    let mut heads = live_heads.clone().unwrap_or_else(|| app.ui.tool_options.shape.arrowheads.clone());
+    let before = heads.clone();
+    let locked = app.ui.tool_options.shape.mode == "shape"
+        && app.session.active().is_some_and(|st| {
+            st.active_layer.is_some_and(|id| {
+                let l = st.doc.effective_locks(id);
+                l.all || l.pixels
+            })
+        });
     let response = menu_button(ui, "settings", tl!("Path Options"));
     egui::Popup::menu(&response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         let o = &mut app.ui.tool_options.shape;
@@ -243,7 +281,53 @@ fn options_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
                 }
             }
         }
+        if tool == Tool::Line {
+            ui.separator();
+            ui.add_enabled_ui(!locked && (shape.is_none() || live_heads.is_some() || o.mode == "pixels"), |ui| {
+                ui.label(tl!("Arrowheads"));
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut heads.start, tl!("Start"));
+                    ui.checkbox(&mut heads.end, tl!("End"));
+                });
+                for (label, value) in [(tl!("Width:"), &mut heads.width), (tl!("Length:"), &mut heads.length)] {
+                    let mut number = *value as f32;
+                    ui.horizontal(|ui| {
+                        ui.label(label);
+                        if crate::widgets::value_field(ui, &mut number, 0.0..=10000.0, "px", 70.0).changed() {
+                            *value = f64::from(number);
+                        }
+                    });
+                }
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Concavity:"));
+                    let mut number = heads.concavity as f32;
+                    if crate::widgets::value_field(ui, &mut number, -50.0..=50.0, "%", 70.0).changed() {
+                        heads.concavity = f64::from(number);
+                    }
+                });
+            });
+        }
     });
+    if heads != before {
+        let mut params = json!({"arrowheads":heads});
+        if let Some(key) = crate::shape_options::edit_key(ui.ctx()) {
+            params["coalesce"] = json!(format!("shape-arrowheads-{:?}-{key}", app.session.active().map(|st| (st.doc.id, st.active_layer))));
+        }
+        let result = if app.ui.tool_options.shape.mode == "path" && live_heads.is_some() {
+            edit_path(app, params)
+        } else if app.ui.tool_options.shape.mode == "shape" && live_heads.is_some() {
+            app.run("shape.edit", params).map(|_| ())
+        } else {
+            Ok(())
+        };
+        match result {
+            Ok(()) => app.ui.tool_options.shape.arrowheads = heads,
+            Err(e) => {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+        }
+    }
 }
 
 #[cfg(test)]

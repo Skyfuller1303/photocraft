@@ -12,6 +12,8 @@
 	Paper Height	Kağıt Yüksekliği
 
 	Color opacity	Renk opaklığı
+	Concavity:	İçbükeylik:
+	End	Son
 	No recent colors	Son kullanılan renk yok
 	Recent Colors	Son Kullanılan Renkler
 	Stop opacity	Durak opaklığı
@@ -3467,9 +3469,12 @@ cameraRaw	Color	Renk
 	Smart Sharpen	Akıllı Keskinleştirme
 	Smudge Stick	Leke Çubuğu
 	Align Edges	Kenarları Hizala
+	Arrowheads	Ok Uçları
 	Path Options	Yol Seçenekleri
 	Proportional	Orantılı
 	Show Path	Yolu Göster
+	Smooth Indents	Girintileri Yumuşat
+	Start	Başlangıç
 	Unconstrained	Kısıtlamasız
 	Constrain Proportions	Oranları Koru
 	Solid Color	Düz Renk

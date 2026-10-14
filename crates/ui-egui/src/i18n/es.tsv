@@ -2637,12 +2637,17 @@ fontWeight	Italic	Cursiva
 	Quick Selection found nothing there	Selección rápida no encontró nada ahí
 	Object Selection found nothing there — try a tighter rectangle	Selección de objetos no encontró nada ahí — pruebe un rectángulo más ajustado
 	No subject found — try a rectangle around the object	No se encontró ningún sujeto — pruebe un rectángulo alrededor del objeto
+	Arrowheads	Puntas de flecha
 	Constrain Proportions	Mantener proporciones
+	End	Fin
 	Path Options	Opciones de trazado
 	Show Path	Mostrar trazado
+	Start	Inicio
 	Align Edges	Alinear bordes
 	Unconstrained	Sin restricciones
 	Proportional	Proporcional
+	Smooth Indents	Suavizar hendiduras
+	Concavity:	Concavidad:
 	Solid Color	Color uniforme
 	Color Picker	Selector de color
 	Recent Colors	Colores recientes

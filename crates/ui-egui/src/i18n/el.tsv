@@ -3079,11 +3079,15 @@
 	Software	Λογισμικό
 	Solarize	Ηλιακή έκθεση
 	Constrain Proportions	Διατήρηση αναλογιών
+	End	Τέλος
 	Path Options	Επιλογές διαδρομής
 	Show Path	Εμφάνιση διαδρομής
+	Start	Αρχή
 	Align Edges	Ευθυγράμμιση άκρων
 	Unconstrained	Χωρίς περιορισμούς
 	Proportional	Αναλογικό
+	Smooth Indents	Ομαλές εσοχές
+	Concavity:	Κοιλότητα:
 	Solid Color	Συμπαγές χρώμα
 	Source	Προέλευση
 	Source: not set ({key}-click with Clone Stamp)	Πηγή: δεν έχει οριστεί ({key}-κλικ με Clone Stamp)
@@ -3718,6 +3722,7 @@ cameraData	Lens	Φακός
 	Add New Artboard	Προσθήκη νέου πίνακα σχεδίασης
 	W	Π
 	H	Υ
+	Arrowheads	Αιχμές βελών
 	Recent Colors	Πρόσφατα χρώματα
 	No recent colors	Δεν υπάρχουν πρόσφατα χρώματα
 	Color opacity	Αδιαφάνεια χρώματος

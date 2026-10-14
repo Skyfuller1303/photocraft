@@ -2603,12 +2603,17 @@ cameraData	Lens	鏡頭
 	Add New Artboard	新增工作區域
 	W	寬
 	H	高
+	Arrowheads	箭頭
 	Constrain Proportions	維持比例
+	End	終點
 	Path Options	路徑選項
 	Show Path	顯示路徑
+	Start	起點
 	Align Edges	對齊邊緣
 	Unconstrained	不受限制
 	Proportional	比例
+	Smooth Indents	平滑凹口
+	Concavity:	凹度：
 	Mask	遮色片
 	Solid Color	純色
 	Color Picker	色彩選擇器

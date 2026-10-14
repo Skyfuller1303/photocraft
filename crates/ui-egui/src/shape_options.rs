@@ -53,6 +53,21 @@ fn target(app: &PhotocraftApp) -> Option<(LayerId, ShapeLayer)> {
     }
 }
 
+/// Geometry shown in the toolbar also seeds the next shape of the same tool.
+pub(crate) fn drawing_live(app: &PhotocraftApp) -> Option<LiveShape> {
+    match app.ui.tool_options.shape.mode.as_str() {
+        "shape" if !app.ui.mask_target && !app.ui.vector_mask_target => {
+            let st = app.session.active()?;
+            match &st.doc.layer(st.active_layer?)?.content {
+                LayerContent::Shape(sh) => sh.live.clone(),
+                _ => None,
+            }
+        }
+        "path" => crate::shape_modes::path_shape(app)?.live,
+        _ => None,
+    }
+}
+
 fn bounds(sh: &ShapeLayer) -> Option<[f64; 4]> {
     match &sh.live {
         Some(LiveShape::Rect { rect, .. } | LiveShape::Ellipse { rect } | LiveShape::Polygon { rect, .. }) => Some(*rect),
@@ -68,6 +83,11 @@ enum Change {
     Width(f32),
     Style(StrokeOptions),
     Size { height: bool, value: f32, linked: bool },
+    Radius(f32),
+    Sides(u32),
+    StarRatio(f64),
+    SmoothIndents(bool),
+    Weight(f32),
 }
 
 fn resize(sh: &ShapeLayer, height: bool, value: f32, linked: bool) -> Result<Value, String> {
@@ -163,6 +183,17 @@ fn apply(app: &mut PhotocraftApp, id: Option<LayerId>, change: Change, coalesce:
                 json!({"stroke": stroke})
             }
             Change::Size { height, value, linked } => resize(sh, *height, *value, *linked)?,
+            Change::Radius(r) => {
+                if matches!(sh.live, Some(LiveShape::Polygon { .. })) {
+                    json!({"cornerRadius": r})
+                } else {
+                    json!({"radii": r})
+                }
+            }
+            Change::Sides(n) => json!({"sides": n}),
+            Change::StarRatio(r) => json!({"starRatio": r}),
+            Change::SmoothIndents(smooth) => json!({"smoothIndents": smooth}),
+            Change::Weight(w) => json!({"weight": w}),
         };
         if let Some(key) = coalesce {
             patch["coalesce"] = json!(format!("shape-toolbar-{:?}-{id:?}-{key}", app.session.active().map(|st| st.doc.id)));
@@ -201,6 +232,11 @@ fn apply(app: &mut PhotocraftApp, id: Option<LayerId>, change: Change, coalesce:
             o.shape_stroke = style;
             o.stroke_width = style_width;
         }
+        Change::Radius(r) => o.corner_radius = r,
+        Change::Sides(n) => o.polygon_sides = n,
+        Change::StarRatio(r) => o.shape.star_ratio = r,
+        Change::SmoothIndents(smooth) => o.shape.smooth_indents = smooth,
+        Change::Weight(w) => o.line_weight = w,
         Change::Size { .. } => {}
     }
     Ok(())
@@ -251,8 +287,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     let shown = if mode == "shape" { target(app) } else { None };
     let path_shape = if mode == "path" { crate::shape_modes::path_shape(app) } else { None };
     let id = shown.as_ref().map(|(id, _)| *id);
-    let layer_sh = shown.as_ref().map(|(_, sh)| sh);
-    let sh = layer_sh.or(path_shape.as_ref());
+    let sh = shown.as_ref().map(|(_, sh)| sh).or(path_shape.as_ref());
     let locked = id.is_some_and(|id| {
         app.session.active().is_some_and(|st| {
             let locks = st.doc.effective_locks(id);
@@ -272,9 +307,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     let mut change = None;
     let mut discrete_paint = false;
     let mut stroke_coalesce = None;
-    let mut edit: Option<Value> = None;
     let doc_id = app.session.active().map(|st| st.doc.id);
-    let key = |k: &str| doc_id.zip(id).map(|(doc, layer)| format!("shape-options-{doc:?}-{}-{k}", layer.0));
     let path_name = (mode == "path").then(|| app.ui.selected_path.as_deref().filter(|n| *n != "layer").unwrap_or("work").to_string());
     ui.push_id(("shape-toolbar", doc_id, id, path_name), |ui| {
         ui.add_enabled_ui(!locked, |ui| {
@@ -320,75 +353,78 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
                     });
                 }
             }
-            // The mode dropdown's separator already precedes these fields in Pixels mode.
-            let separator = |ui: &mut egui::Ui| {
-                if mode != "pixels" {
-                    crate::widgets::vline(ui, 22.0);
-                }
-            };
-            // Geometry fields keep their previous behaviour: they set the next shape's default and
-            // edit the selected live shape layer.
-            let o = &mut app.ui.tool_options;
             match tool {
-                Tool::Rectangle => {
-                    separator(ui);
-                    label(ui, tl!("Radius:"));
-                    let mut r = match layer_sh.and_then(|s| s.live.as_ref()) {
-                        Some(LiveShape::Rect { radii, .. }) => radii[0] as f32,
-                        _ => o.corner_radius,
-                    };
-                    if crate::widgets::value_field(ui, &mut r, 0.0..=10000.0, "px", 62.0).changed() {
-                        o.corner_radius = r;
-                        let rf = r as f64;
-                        edit = Some(json!({"radii": [rf, rf, rf, rf], "coalesce": key("radius")}));
-                    }
+                Tool::Rectangle | Tool::Triangle | Tool::Polygon => {
+                    let live_radius = sh.and_then(|sh| match sh.live {
+                        Some(LiveShape::Rect { radii, .. }) if tool == Tool::Rectangle => Some(radii[0] as f32),
+                        Some(LiveShape::Polygon { corner_radius, .. }) if tool != Tool::Rectangle => Some(corner_radius as f32),
+                        _ => None,
+                    });
+                    ui.add_enabled_ui(sh.is_none() || live_radius.is_some(), |ui| {
+                        label(ui, tl!("Radius:"));
+                        let mut radius = live_radius.unwrap_or(app.ui.tool_options.corner_radius);
+                        let max_radius = 10000.0_f32.max(radius);
+                        if crate::widgets::value_field(ui, &mut radius, 0.0..=max_radius, "px", 62.0).changed() && ui.is_enabled() {
+                            change = Some(Change::Radius(radius));
+                        }
+                    });
                 }
+                _ => {}
+            }
+            match tool {
                 Tool::Polygon => {
-                    separator(ui);
-                    label(ui, tl!("Sides:"));
-                    let mut s = o.polygon_sides as f32;
-                    if crate::widgets::value_field(ui, &mut s, 3.0..=100.0, "", 48.0).changed() {
-                        o.polygon_sides = s.round().clamp(3.0, 100.0) as u32;
-                    }
+                    let live_sides = sh.and_then(|sh| match sh.live {
+                        Some(LiveShape::Polygon { sides, .. }) => Some(sides),
+                        _ => None,
+                    });
+                    ui.add_enabled_ui(sh.is_none() || live_sides.is_some(), |ui| {
+                        label(ui, tl!("Sides:"));
+                        let mut sides = live_sides.unwrap_or(app.ui.tool_options.polygon_sides) as f32;
+                        if crate::widgets::value_field(ui, &mut sides, 3.0..=100.0, "", 48.0).changed() && ui.is_enabled() {
+                            change = Some(Change::Sides(sides.round().clamp(3.0, 100.0) as u32));
+                        }
+                        let (ratio, smooth) = sh
+                            .and_then(|sh| match sh.live {
+                                Some(LiveShape::Polygon { star_ratio, smooth_indents, .. }) => Some((star_ratio, smooth_indents)),
+                                _ => None,
+                            })
+                            .unwrap_or((app.ui.tool_options.shape.star_ratio, app.ui.tool_options.shape.smooth_indents));
+                        let mut percent = (ratio * 100.0) as f32;
+                        label(ui, tl!("Star Ratio:"));
+                        if crate::widgets::value_field(ui, &mut percent, 1.0..=100.0, "%", 58.0).changed() && ui.is_enabled() {
+                            change = Some(Change::StarRatio(f64::from(percent) / 100.0));
+                        }
+                        let mut smooth = smooth;
+                        if ui.checkbox(&mut smooth, tl!("Smooth Indents")).changed() {
+                            change = Some(Change::SmoothIndents(smooth));
+                        }
+                    });
                 }
                 Tool::Line => {
-                    separator(ui);
-                    label(ui, tl!("Weight:"));
-                    crate::widgets::value_field(ui, &mut o.line_weight, 1.0..=1000.0, "px", 58.0);
-                }
-                Tool::CustomShape => {
-                    separator(ui);
-                    crate::preset_panels::shape_picker(app, ui);
-                }
-                _ if matches!(tool, Tool::PathSelection | Tool::DirectSelection) => {
-                    if let Some(LiveShape::Rect { radii, .. }) = layer_sh.and_then(|s| s.live.as_ref()) {
-                        separator(ui);
-                        label(ui, tl!("Radius:"));
-                        let mut r = radii[0] as f32;
-                        if crate::widgets::value_field(ui, &mut r, 0.0..=10000.0, "px", 62.0).changed() {
-                            o.corner_radius = r;
-                            let rf = r as f64;
-                            edit = Some(json!({"radii": [rf, rf, rf, rf], "coalesce": key("radius")}));
+                    let live_weight = sh.and_then(|sh| match sh.live {
+                        Some(LiveShape::Line { weight, .. }) => Some(weight as f32),
+                        _ => None,
+                    });
+                    ui.add_enabled_ui(sh.is_none() || live_weight.is_some(), |ui| {
+                        label(ui, tl!("Weight:"));
+                        let mut weight = live_weight.unwrap_or(app.ui.tool_options.line_weight);
+                        let (min_weight, max_weight) = (1.0_f32.min(weight), 1000.0_f32.max(weight));
+                        if crate::widgets::value_field(ui, &mut weight, min_weight..=max_weight, "px", 58.0).changed() && ui.is_enabled() {
+                            change = Some(Change::Weight(weight));
                         }
-                    }
+                    });
                 }
+                Tool::CustomShape => crate::preset_panels::shape_picker(app, ui),
                 _ => {}
             }
         });
     });
-    let coalesce = if discrete_paint { None } else { stroke_coalesce.or_else(|| edit_key(ui.ctx())) };
+    let key = if discrete_paint { None } else { stroke_coalesce.or_else(|| edit_key(ui.ctx())) };
     if let Some(change) = change
-        && let Err(error) = apply(app, id, change, coalesce)
+        && let Err(error) = apply(app, id, change, key)
     {
         app.ui.status = error;
         app.ui.status_error = true;
-    }
-    if let (Some(mut p), Some(layer)) = (edit, id) {
-        p["layer"] = json!(layer.0);
-        if let Err(e) = app.run("shape.edit", p) {
-            app.ui.status = e;
-            app.ui.status_error = true;
-        }
     }
 }
 
@@ -648,5 +684,30 @@ mod tests {
         let old: crate::state::ToolOptions = serde_json::from_value(saved).unwrap();
         assert!(old.shape_fill_color.is_none() && old.shape_stroke_color.is_none());
         assert!(!old.shape_link_dimensions);
+    }
+
+    #[test]
+    fn star_toolbar_edits_live_geometry_without_changing_paint_and_undoes() {
+        let mut a = app(16);
+        a.ui.tool = Tool::Polygon;
+        let id = LayerId(
+            a.run("shape.create", json!({"kind":"polygon","rect":[20,20,100,100],"sides":5,"starRatio":0.5,"fill":"#aa2233"})).unwrap()["layer"]
+                .as_u64()
+                .unwrap(),
+        );
+        let original = shape(&a, id).clone();
+        apply(&mut a, Some(id), Change::StarRatio(0.4), None).unwrap();
+        assert!(matches!(shape(&a, id).live, Some(LiveShape::Polygon { star_ratio: 0.4, .. })));
+        let sharp = shape(&a, id).path.clone();
+        let mut h = harness(a);
+        h.get_by_label("Smooth Indents").click();
+        h.run_steps(3);
+        assert!(matches!(shape(h.state(), id).live, Some(LiveShape::Polygon { smooth_indents: true, .. })));
+        assert_ne!(shape(h.state(), id).path, sharp);
+        assert_eq!(shape(h.state(), id).fill, original.fill);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(shape(h.state(), id).path, sharp);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(shape(h.state(), id), &original);
     }
 }

@@ -273,12 +273,13 @@ Shape tools use `ui.set {shapeOptions: {mode: "shape"|"path"|"pixels", blend: "N
 opacity: 0..100, antiAlias: bool, pathWidth: 0.5..10, pathColor: [r,g,b]|null,
 showPath: bool, fromCenter: bool, constrain: bool,
 sizeMode: "unconstrained"|"square"|"fixed"|"proportional", sizeWidth: 1..300000,
-sizeHeight: 1..300000, alignEdges: bool}}`.
-Size dimensions are document pixels.
+sizeHeight: 1..300000, alignEdges: bool, starRatio: 0.01..1, smoothIndents: bool,
+arrowheads: {start: bool, end: bool, width: 0..10000, length: 0..10000, concavity: -50..50}}}`.
+Size dimensions and arrowhead width/length are document pixels. Concavity is percent.
 Fixed mode uses the configured dimensions; proportional mode uses their aspect ratio.
 Align Edges rounds the drag endpoints to the pixel grid and can be disabled for subpixel geometry.
 Modifiers held while dragging still constrain proportions or draw from the centre.
-Widths are pixels; path display settings affect the overlay only. Unknown keys and
+Widths and lengths are pixels; path display settings affect the overlay only. Unknown keys and
 invalid values reject the complete call. Pixel drags dispatch `shape.drawPixels` and respect the
 active selection, paint target and layer locks. Pixel drawing bounds are limited to 8 GiB of
 stored tiles on 64-bit targets and 2 GiB on 32-bit targets; oversized draws fail before painting.
