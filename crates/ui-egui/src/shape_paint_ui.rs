@@ -61,11 +61,23 @@ fn paint(app: &PhotocraftApp, ui: &egui::Ui, rect: egui::Rect, fill: Option<&Fil
 }
 
 fn context(app: &PhotocraftApp) -> egui::Id {
-    egui::Id::new((app.session.active().map(|st| (st.doc.id, st.revision, st.active_layer)), app.ui.tool, app.ui.mask_target, app.ui.vector_mask_target))
+    egui::Id::new((
+        app.session.active().map(|st| (st.doc.id, st.revision, st.active_layer)),
+        app.ui.tool,
+        app.ui.mask_target,
+        app.ui.vector_mask_target,
+        &app.ui.tool_options.shape.mode,
+    ))
 }
 
 fn paint_target(app: &PhotocraftApp) -> egui::Id {
-    egui::Id::new((app.session.active().map(|st| (st.doc.id, st.active_layer)), app.ui.tool, app.ui.mask_target, app.ui.vector_mask_target))
+    egui::Id::new((
+        app.session.active().map(|st| (st.doc.id, st.active_layer)),
+        app.ui.tool,
+        app.ui.mask_target,
+        app.ui.vector_mask_target,
+        &app.ui.tool_options.shape.mode,
+    ))
 }
 
 #[derive(Clone)]

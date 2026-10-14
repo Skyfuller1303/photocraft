@@ -175,7 +175,7 @@ pub const UI_SET_FIELDS: [&str; 35] = [
 /// the same ceiling as the steps of one batch request.
 pub const MAX_CLICKS: u64 = 256;
 
-const SHAPE_UI_SET_FIELDS: [&str; 2] = ["shapeFillPaint", "shapeStrokePaint"];
+const SHAPE_UI_SET_FIELDS: [&str; 3] = ["shapeOptions", "shapeFillPaint", "shapeStrokePaint"];
 
 /// Every accepted field, including independent Shape defaults and the core controls.
 pub fn ui_set_fields() -> impl Iterator<Item = &'static str> {
@@ -548,6 +548,10 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 };
                 // The Crop tool's gear menu: Show Cropped Area and the shield (#1919).
                 let crop_shield = merged_object(&app.ui.tool_options.crop_shield, p.get("cropShield"), "cropShield")?;
+                let shape_options = merged_object(&app.ui.tool_options.shape, p.get("shapeOptions"), "shapeOptions")?;
+                if let Some(o) = &shape_options {
+                    o.validate()?;
+                }
                 let shape_fill_paint =
                     p.get("shapeFillPaint").map(|v| photocraft_engine::vector_cmds::shape_fill(&app.session, v)).transpose().map_err(|e| e.to_string())?;
                 let shape_stroke_paint =
@@ -739,6 +743,10 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(v) = dock_tabs {
                     app.ui.dock_tabs = v;
+                }
+                if let Some(mut o) = shape_options {
+                    o.path_geometry = app.ui.tool_options.shape.path_geometry.clone();
+                    app.ui.tool_options.shape = o;
                 }
                 // Dock group order, heights and collapsed groups (see `dock::DockLayout`).
                 if let Some(v) = dock {

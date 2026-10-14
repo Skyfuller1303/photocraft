@@ -589,6 +589,11 @@ pub struct ToolOptions {
     pub shape_fill_paint: Option<photocraft_doc::Fill>,
     #[serde(default)]
     pub shape_stroke_paint: Option<photocraft_doc::Fill>,
+    /// Keep the active shape's width-to-height ratio when editing toolbar dimensions.
+    #[serde(default)]
+    pub shape_link_dimensions: bool,
+    #[serde(default)]
+    pub shape: crate::shape_modes::ShapeToolOptions,
     pub stroke_width: f32,
     #[serde(default)]
     pub shape_stroke: crate::shape_stroke_ui::StrokeOptions,
@@ -812,6 +817,8 @@ impl Default for ToolOptions {
             shape_stroke_color: None,
             shape_fill_paint: None,
             shape_stroke_paint: None,
+            shape_link_dimensions: false,
+            shape: Default::default(),
             stroke_width: 0.0,
             shape_stroke: Default::default(),
             corner_radius: 0.0,

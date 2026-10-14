@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
-use crate::state::{Tool, ToolOptions};
+use crate::state::Tool;
 use crate::theme::Tokens;
 
 /// Pen tool path under construction: knots as [anchor, in, out] (document px).
@@ -70,10 +70,14 @@ fn stroke_param(app: &PhotocraftApp) -> Value {
 
 /// Geometry of a Shape-tool drag as `shape.create` params, without fill and stroke (None when too
 /// small): ⇧ constrains proportions, ⌥ draws from the centre. Custom shapes give their box as a `rect`.
-fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<Value> {
+pub(crate) fn shape_geometry(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<Value> {
+    let o = &app.ui.tool_options;
+    if !start.iter().chain(end.iter()).all(|v| v.is_finite()) || o.shape.validate().is_err() {
+        return None;
+    }
     Some(if tool == Tool::Line {
         let (mut dx, mut dy) = (end[0] - start[0], end[1] - start[1]);
-        if mods.shift {
+        if mods.shift || o.shape.constrain {
             // Snap to 45°.
             let a = (dy.atan2(dx) / std::f64::consts::FRAC_PI_4).round() * std::f64::consts::FRAC_PI_4;
             let len = dx.hypot(dy);
@@ -82,16 +86,28 @@ fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], m
         if dx.hypot(dy) < 1.0 {
             return None;
         }
-        json!({"kind": "line", "from": start, "to": [start[0] + dx, start[1] + dy], "weight": o.line_weight.max(1.0)})
+        let snap = |p: [f64; 2]| if o.shape.align_edges { p.map(f64::round) } else { p };
+        let from = snap(if mods.alt || o.shape.from_center { [start[0] - dx, start[1] - dy] } else { start });
+        json!({"kind": "line", "from": from, "to": snap([start[0] + dx, start[1] + dy]), "weight": o.line_weight.max(1.0)})
     } else {
         let (mut w, mut h) = (end[0] - start[0], end[1] - start[1]);
-        if mods.shift {
+        let center = mods.alt || o.shape.from_center;
+        let sign = |v: f64| if v < 0.0 { -1.0 } else { 1.0 };
+        if o.shape.size_mode == "fixed" {
+            let half = if center { 0.5 } else { 1.0 };
+            (w, h) = (o.shape.size_width * sign(w) * half, o.shape.size_height * sign(h) * half);
+        } else if mods.shift || o.shape.constrain || o.shape.size_mode == "square" {
             let m = w.abs().max(h.abs());
-            (w, h) = (m * w.signum(), m * h.signum());
+            (w, h) = (m * sign(w), m * sign(h));
+        } else if o.shape.size_mode == "proportional" {
+            let scale = (w.abs() / o.shape.size_width).max(h.abs() / o.shape.size_height);
+            (w, h) = (o.shape.size_width * scale * sign(w), o.shape.size_height * scale * sign(h));
         }
-        let (x0, y0) = if mods.alt { (start[0] - w, start[1] - h) } else { (start[0], start[1]) };
-        let (w, h) = if mods.alt { (w * 2.0, h * 2.0) } else { (w, h) };
-        let rect = [x0.min(x0 + w).round(), y0.min(y0 + h).round(), w.abs().round(), h.abs().round()];
+        let (x0, y0) = if center { (start[0] - w, start[1] - h) } else { (start[0], start[1]) };
+        let (w, h) = if center { (w * 2.0, h * 2.0) } else { (w, h) };
+        let snap = |v: f64| if o.shape.align_edges { v.round() } else { v };
+        let (left, top, right, bottom) = (snap(x0.min(x0 + w)), snap(y0.min(y0 + h)), snap(x0.max(x0 + w)), snap(y0.max(y0 + h)));
+        let rect = [left, top, right - left, bottom - top];
         if rect[2] < 1.0 || rect[3] < 1.0 {
             return None;
         }
@@ -107,15 +123,19 @@ fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], m
 
 /// Finish a Shape-tool drag: ⇧ constrains proportions, ⌥ draws from the centre.
 pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
-    let Some(mut p) = shape_geometry(&app.ui.tool_options, tool, start, end, mods) else { return };
+    let Some(mut p) = shape_geometry(app, tool, start, end, mods) else { return };
     if tool == Tool::CustomShape {
-        // ⇧ keeps the shape's proportions (the rect is already squared).
-        if let Ok(rect) = serde_json::from_value(p["rect"].take()) {
-            let mut paint = json!({});
-            add_paint(app, &mut paint);
-            crate::preset_panels::finish_custom_shape(app, rect, mods.shift, paint["fill"].take(), paint["stroke"].take());
-        }
-        return;
+        let Some(rect) = p.get("rect").and_then(|r| serde_json::from_value::<[f64; 4]>(r.clone()).ok()) else { return };
+        let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
+        let Some(shape) = groups.iter().flat_map(|g| &g.items).find(|s| s.name == app.ui.presets_ui.shape()) else {
+            let template = "No custom shape \"{name}\": pick one in the options bar or Window › Shapes";
+            app.ui.status = crate::i18n::fmt(tl!(template), &[("name", app.ui.presets_ui.shape())]);
+            app.ui.status_error = true;
+            return;
+        };
+        let keep_aspect = app.ui.tool_options.shape.size_mode != "fixed" && (mods.shift || app.ui.tool_options.shape.constrain);
+        let path = photocraft_engine::presets::shapes::fit(&shape.path, rect, keep_aspect);
+        p = json!({"kind": "path", "path": photocraft_engine::vector_cmds::path_json(&path), "name": shape.name});
     }
     if let Err(e) = create_shape(app, p) {
         app.ui.status = e;
@@ -131,7 +151,7 @@ fn fill_param(app: &PhotocraftApp) -> Value {
 /// end of a drag, and the Create Rectangle / Ellipse / … dialogs (`shape_dialog`).
 pub fn create_shape(app: &mut PhotocraftApp, mut geometry: Value) -> Result<Value, String> {
     add_paint(app, &mut geometry);
-    app.run("shape.create", geometry)
+    crate::shape_modes::create(app, geometry)
 }
 
 fn add_paint(app: &PhotocraftApp, geometry: &mut Value) {
@@ -144,16 +164,25 @@ fn add_paint(app: &PhotocraftApp, geometry: &mut Value) {
 /// The preview and command both use the full paint, including transparent float colours.
 fn shape_preview(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<photocraft_doc::ShapeLayer> {
     let o = &app.ui.tool_options;
-    let geometry = shape_geometry(o, tool, start, end, mods)?;
+    let geometry = shape_geometry(app, tool, start, end, mods)?;
     let path = if tool == Tool::CustomShape {
         let rect = geometry.get("rect").and_then(|r| serde_json::from_value::<[f64; 4]>(r.clone()).ok())?;
         let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
         let shape = groups.iter().flat_map(|g| &g.items).find(|s| s.name == app.ui.presets_ui.shape())?;
-        photocraft_engine::presets::shapes::fit(&shape.path, rect, mods.shift)
+        let keep_aspect = app.ui.tool_options.shape.size_mode != "fixed" && (mods.shift || app.ui.tool_options.shape.constrain);
+        photocraft_engine::presets::shapes::fit(&shape.path, rect, keep_aspect)
     } else {
         photocraft_engine::vector_cmds::shape_path(&geometry).ok()?
     };
-    let (fill, stroke) = crate::shape_options::paint(app);
+    let (fill, stroke) = match o.shape.mode.as_str() {
+        "shape" => crate::shape_options::paint(app),
+        "pixels" => {
+            let mut color = app.session.tools.foreground;
+            color[3] *= o.shape.opacity.clamp(0.0, 100.0) / 100.0;
+            (Some(solid_paint(color)), None)
+        }
+        _ => (None, None),
+    };
     Some(photocraft_doc::ShapeLayer { path, fill, stroke, ..Default::default() })
 }
 
@@ -172,10 +201,19 @@ pub fn draw_shape_preview(app: &PhotocraftApp, painter: &egui::Painter, xf: &Vie
     // This lightweight screen overlay retains the existing display-colour behaviour; document
     // rendering still goes through its format/profile path when the shape is committed.
     crate::shape_stroke_ui::paint_shape_preview(painter, &shape);
-    let accent = Tokens::get(painter.ctx()).accent;
-    for (pts, _) in path_lines(&path, &|q| xf.to_screen(q[0] as f32, q[1] as f32)) {
+    let (accent, width) = crate::shape_modes::path_display(app, painter.ctx());
+    if !app.ui.tool_options.shape.show_path {
+        return;
+    }
+    for (pts, closed) in path_lines(&path, &|q| xf.to_screen(q[0] as f32, q[1] as f32)) {
         // The accent path over a dark halo: visible on any pixels (#172).
-        painter.extend(crate::tool_feedback::contrast_path(pts, true, accent));
+        let mut shapes = crate::tool_feedback::contrast_path(pts, closed, accent);
+        for shape in &mut shapes {
+            if let egui::Shape::Path(p) = shape {
+                p.stroke.width *= width;
+            }
+        }
+        painter.extend(shapes);
     }
 }
 
@@ -909,12 +947,12 @@ pub(crate) fn path_lines(path: &Path, xf: &dyn Fn([f64; 2]) -> Pos2) -> Vec<(Vec
 }
 
 /// A path's outline in the accent colour.
-pub(crate) fn draw_outline(painter: &egui::Painter, p: &Path, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32) {
+pub(crate) fn draw_outline(painter: &egui::Painter, p: &Path, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32, width: f32) {
     for (pts, closed) in path_lines(p, to_scr) {
         if closed {
-            painter.add(egui::Shape::closed_line(pts, Stroke::new(1.0, accent)));
+            painter.add(egui::Shape::closed_line(pts, Stroke::new(width, accent)));
         } else {
-            painter.add(egui::Shape::line(pts, Stroke::new(1.0, accent)));
+            painter.add(egui::Shape::line(pts, Stroke::new(width, accent)));
         }
     }
 }
@@ -935,11 +973,14 @@ pub(crate) fn draw_handle(painter: &egui::Painter, anchor: Pos2, handle: Pos2, a
 /// Work path / active shape path outlines, anchors, and the pen path in progress.
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let tool = app.ui.tool;
-    let vector_tool = matches!(tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::PathSelection) || is_shape_tool(tool);
-    let accent = Tokens::get(painter.ctx()).accent;
+    let vector_tool = matches!(tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::PathSelection)
+        || (is_shape_tool(tool) && app.ui.tool_options.shape.mode != "pixels");
+    let (accent, width) = crate::shape_modes::path_display(app, painter.ctx());
     let to_scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     let draw_path = |p: &Path, anchors: bool| {
-        draw_outline(painter, p, &to_scr, accent);
+        for (pts, closed) in path_lines(p, &to_scr) {
+            painter.add(if closed { egui::Shape::closed_line(pts, Stroke::new(width, accent)) } else { egui::Shape::line(pts, Stroke::new(width, accent)) });
+        }
         if anchors {
             for k in p.subpaths.iter().flat_map(|s| &s.knots) {
                 draw_anchor(painter, to_scr([k.anchor.x, k.anchor.y]), false, accent);
@@ -948,7 +989,8 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     };
     // View › Show › Target Path (under Extras) hides the paths; the Pen's path in progress stays.
     // Free Transform Path draws the path through its box instead (transform_tool).
-    let paths = app.ui.view.shows(app.ui.view.show.target_path) && app.ui.transform.as_ref().is_none_or(|t| t.path.is_none());
+    let paths =
+        app.ui.tool_options.shape.show_path && app.ui.view.shows(app.ui.view.show.target_path) && !app.ui.transform.as_ref().is_some_and(|t| t.path.is_some());
     if crate::direct_select::shows(app, painter.ctx().input(|i| i.modifiers)) {
         // Direct Selection (or the Pen with ⌘/Ctrl held) draws the paths it edits (#790).
         crate::direct_select::draw_overlay(app, painter, &to_scr, accent, paths);
@@ -957,7 +999,11 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         }
     } else if paths {
         if vector_tool {
-            if let Some(wp) = &doc.work_path {
+            if is_shape_tool(tool) && app.ui.tool_options.shape.mode == "path" {
+                if let Some(sh) = crate::shape_modes::path_shape(app) {
+                    draw_path(&sh.path, tool == Tool::PathSelection);
+                }
+            } else if let Some(wp) = &doc.work_path {
                 draw_path(wp, tool == Tool::PathSelection);
             }
             let st = app.session.active();
@@ -1118,10 +1164,16 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         return true;
     }
-    let mut mode = "shape".to_string();
-    crate::widgets::dropdown(ui, "shape-mode", &mut mode, &[("shape".to_string(), tl!("Shape"))], 80.0);
-    crate::widgets::vline(ui, 22.0);
-    crate::shape_options::options_bar(app, ui, tool);
+    // Keep every option reachable in narrow windows and longer translations.
+    egui::ScrollArea::horizontal().id_salt(("shape-tool-options", tool)).auto_shrink([false, true]).show(ui, |ui| {
+        ui.horizontal_centered(|ui| {
+            let opts = [("shape".to_string(), tl!("Shape")), ("path".to_string(), tl!("Path")), ("pixels".to_string(), tl!("Pixels"))];
+            crate::widgets::dropdown(ui, "shape-mode", &mut app.ui.tool_options.shape.mode, &opts, 80.0);
+            crate::widgets::vline(ui, 22.0);
+            crate::shape_options::options_bar(app, ui, tool);
+            crate::shape_modes::actions(app, ui, tool);
+        });
+    });
     true
 }
 
@@ -1135,7 +1187,6 @@ fn selected_shape(session: &photocraft_engine::Session) -> Option<photocraft_doc
 // ---------------------------------------------------------------------------------------------
 // Properties (shape layers)
 
-#[cfg(test)]
 fn solid_paint(c: [f32; 4]) -> photocraft_doc::Fill {
     photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(c[0], c[1], c[2], c[3]))
 }
@@ -1814,8 +1865,7 @@ mod tests {
         let mut app = app();
         app.ui.tool_options.corner_radius = 8.0;
         let preview = |app: &PhotocraftApp, tool, end| {
-            shape_geometry(&app.ui.tool_options, tool, [10.0, 10.0], end, egui::Modifiers::ALT)
-                .and_then(|p| photocraft_engine::vector_cmds::shape_path(&p).ok())
+            shape_geometry(app, tool, [10.0, 10.0], end, egui::Modifiers::ALT).and_then(|p| photocraft_engine::vector_cmds::shape_path(&p).ok())
         };
         for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Line] {
             let shown = preview(&app, tool, [60.0, 30.0]).unwrap();

@@ -208,7 +208,7 @@ pub(crate) fn sync_editor(app: &mut crate::PhotocraftApp, ctx: &egui::Context) {
         })
     } else {
         let tool = app.ui.tool;
-        ((e.key == "tool-stroke" && crate::vector_ui::is_shape_tool(tool))
+        ((e.key == "tool-stroke" && crate::vector_ui::is_shape_tool(tool) && app.ui.tool_options.shape.mode == "shape")
             || (e.key == "pen-stroke" && tool == crate::state::Tool::Pen && app.ui.tool_options.vector_mode == "shape"))
             && app.ui.tool_options.shape_stroke == e.original
     };

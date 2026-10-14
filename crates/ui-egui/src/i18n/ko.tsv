@@ -2600,6 +2600,13 @@ cameraRaw	Color	색상
 	Duplicate Layer	레이어 복제
 	Global Light	전체 조명
 	Scale Effects	효과 크기 조절
+	Constrain Proportions	비율 유지
+	Path Options	패스 옵션
+	Show Path	패스 표시
+	Align Edges	가장자리 정렬
+	Unconstrained	제한 없음
+	Proportional	비율 유지
+	Mask	마스크
 	Solid Color	단색
 	Convert to Linked	연결된 오브젝트로 변환
 	Replace Contents	내용 대체

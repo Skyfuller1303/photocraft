@@ -1,12 +1,15 @@
 //! Shape toolbar edits share the engine commands used by the Properties panel.
 
-use photocraft_doc::{Fill, LayerContent, LayerId, ShapeLayer};
+use egui::Sense;
+use photocraft_doc::{Fill, LayerContent, LayerId, LiveShape, ShapeLayer};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::shape_stroke_ui::StrokeOptions;
 use crate::state::Tool;
 use crate::theme::Tokens;
+
+const MAX_SIZE: f32 = 300_000.0;
 
 pub(crate) fn fill_color(app: &PhotocraftApp) -> [f32; 4] {
     app.ui.tool_options.shape_fill_color.unwrap_or(app.session.tools.foreground)
@@ -21,7 +24,9 @@ fn solid(color: [f32; 4]) -> Fill {
 }
 
 pub(crate) fn paint(app: &PhotocraftApp) -> (Option<Fill>, Option<photocraft_doc::ShapeStroke>) {
-    if let Some((_, sh)) = target(app) {
+    if app.ui.tool_options.shape.mode == "shape"
+        && let Some((_, sh)) = target(app)
+    {
         return (sh.fill, sh.stroke);
     }
     let o = &app.ui.tool_options;
@@ -48,23 +53,81 @@ fn target(app: &PhotocraftApp) -> Option<(LayerId, ShapeLayer)> {
     }
 }
 
+fn bounds(sh: &ShapeLayer) -> Option<[f64; 4]> {
+    match &sh.live {
+        Some(LiveShape::Rect { rect, .. } | LiveShape::Ellipse { rect } | LiveShape::Polygon { rect, .. }) => Some(*rect),
+        Some(LiveShape::Line { from, to, .. }) => Some([from[0].min(to[0]), from[1].min(to[1]), (to[0] - from[0]).abs(), (to[1] - from[1]).abs()]),
+        _ => sh.path.control_bounds().map(|(x0, y0, x1, y1)| [x0, y0, x1 - x0, y1 - y0]),
+    }
+    .filter(|r| r.iter().all(|v| v.is_finite()))
+}
+
 enum Change {
     Fill(Option<Fill>),
     Stroke(Option<Fill>),
     Width(f32),
     Style(StrokeOptions),
+    Size { height: bool, value: f32, linked: bool },
+}
+
+fn resize(sh: &ShapeLayer, height: bool, value: f32, linked: bool) -> Result<Value, String> {
+    if !value.is_finite() || !(1.0..=MAX_SIZE).contains(&value) {
+        return Err("Shape dimensions must be between 1 and 300000 pixels".into());
+    }
+    let [x, y, w, h] = bounds(sh).ok_or("The shape has no finite bounds")?;
+    let old = if height { h } else { w };
+    if old <= 0.0 || (linked && (w <= 0.0 || h <= 0.0)) {
+        return Err("Cannot resize a zero-length shape dimension".into());
+    }
+    let scale = f64::from(value) / old;
+    // Keep the entered dimension exact; derive only its linked companion.
+    let value = f64::from(value);
+    let (nw, nh) = if height { (if linked { w * value / h } else { w }, value) } else { (value, if linked { h * value / w } else { h }) };
+    if !scale.is_finite() || !nw.is_finite() || !nh.is_finite() {
+        return Err("The resized shape dimensions are not finite".into());
+    }
+    if linked && (!(1.0..=f64::from(MAX_SIZE)).contains(&nw) || !(1.0..=f64::from(MAX_SIZE)).contains(&nh)) {
+        return Err("Linked shape dimensions must be between 1 and 300000 pixels".into());
+    }
+    Ok(match sh.live {
+        Some(LiveShape::Rect { .. } | LiveShape::Ellipse { .. } | LiveShape::Polygon { .. }) => json!({"rect": [x, y, nw, nh]}),
+        Some(LiveShape::Line { from, to, .. }) => {
+            let point =
+                |p: [f64; 2]| [if !height || linked { x + (p[0] - x) * scale } else { p[0] }, if height || linked { y + (p[1] - y) * scale } else { p[1] }];
+            json!({"from": point(from), "to": point(to)})
+        }
+        // Custom paths keep their path geometry instead of becoming rectangles.
+        _ => {
+            let (sx, sy) = (if !height || linked { scale } else { 1.0 }, if height || linked { scale } else { 1.0 });
+            let transform = [sx, 0.0, 0.0, sy, x * (1.0 - sx), y * (1.0 - sy)];
+            if transform.iter().any(|v| !v.is_finite()) {
+                return Err("The resized shape transform is not finite".into());
+            }
+            json!({"transform": transform})
+        }
+    })
 }
 
 /// Change an explicit toolbar target, then update defaults only after a successful edit.
 fn apply(app: &mut PhotocraftApp, id: Option<LayerId>, change: Change, coalesce: Option<String>) -> Result<(), String> {
-    let shape = id.and_then(|id| app.session.active()?.doc.layer(id)).and_then(|l| match &l.content {
-        LayerContent::Shape(sh) => Some(sh),
-        _ => None,
-    });
+    if let Some(id) = id
+        && matches!(change, Change::Size { .. })
+        && app.session.active().is_some_and(|st| st.doc.effective_locks(id).position)
+    {
+        return Err("Shape position is locked".into());
+    }
+    let path_shape = (app.ui.tool_options.shape.mode == "path").then(|| crate::shape_modes::path_shape(app)).flatten();
+    let shape = id
+        .and_then(|id| app.session.active()?.doc.layer(id))
+        .and_then(|l| match &l.content {
+            LayerContent::Shape(sh) => Some(sh),
+            _ => None,
+        })
+        .or(path_shape.as_ref());
     let default_width = app.ui.tool_options.stroke_width;
     let stroke_width = shape.and_then(|sh| sh.stroke.as_ref()).map_or(if default_width > 0.0 { default_width } else { 3.0 }, |s| s.width);
     let style_width = crate::vector_ui::enabled_stroke_width(if stroke_width > 0.0 { stroke_width } else { default_width });
-    if let Some(id) = id {
+    if id.is_some() || path_shape.is_some() {
         let sh = shape.ok_or("The toolbar target is no longer a shape layer")?;
         let mut patch = match &change {
             Change::Fill(fill) => json!({"fill": photocraft_engine::vector_cmds::shape_paint_params(fill.as_ref(), None)["fill"].clone()}),
@@ -99,12 +162,17 @@ fn apply(app: &mut PhotocraftApp, id: Option<LayerId>, change: Change, coalesce:
                 }
                 json!({"stroke": stroke})
             }
+            Change::Size { height, value, linked } => resize(sh, *height, *value, *linked)?,
         };
         if let Some(key) = coalesce {
             patch["coalesce"] = json!(format!("shape-toolbar-{:?}-{id:?}-{key}", app.session.active().map(|st| st.doc.id)));
         }
-        patch["layer"] = json!(id.0);
-        app.run("shape.edit", patch)?;
+        if let Some(id) = id {
+            patch["layer"] = json!(id.0);
+            app.run("shape.edit", patch)?;
+        } else {
+            crate::shape_modes::edit_path(app, patch)?;
+        }
     }
     let o = &mut app.ui.tool_options;
     match change {
@@ -133,6 +201,7 @@ fn apply(app: &mut PhotocraftApp, id: Option<LayerId>, change: Change, coalesce:
             o.shape_stroke = style;
             o.stroke_width = style_width;
         }
+        Change::Size { .. } => {}
     }
     Ok(())
 }
@@ -152,16 +221,45 @@ pub(crate) fn edit_key(ctx: &egui::Context) -> Option<String> {
     focused.map(|id| format!("focus-{}-{started}", id.value()))
 }
 
+fn dimension(ui: &mut egui::Ui, height: bool, value: &mut f32) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let label = if height { tl!("H") } else { tl!("W") };
+    let response = ui
+        .add(egui::Label::new(egui::RichText::new(format!("{label}:")).color(t.text_dim).size(12.0)).sense(Sense::drag()))
+        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+        .on_hover_text(if height { tl!("Height") } else { tl!("Width") });
+    let start_key = response.id.with("scrub-start");
+    if response.drag_started() {
+        ui.data_mut(|d| d.insert_temp(start_key, *value));
+    }
+    let mut changed = false;
+    if response.dragged()
+        && let (Some(start), Some(origin), Some(pos)) =
+            (ui.data(|d| d.get_temp::<f32>(start_key)), ui.input(|i| i.pointer.press_origin()), response.interact_pointer_pos())
+    {
+        let next = (start + (pos.x - origin.x) * 0.5).clamp(1.0, MAX_SIZE);
+        changed = next != *value;
+        *value = next;
+    }
+    // Disabled zero-length axes and imported subpixel sizes must not clamp on every draw.
+    let field = crate::widgets::value_field(ui, value, 0.0..=MAX_SIZE.max(*value), "px", 62.0);
+    ui.is_enabled() && (field.changed() || changed)
+}
+
 pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
-    let shown = target(app);
+    let mode = app.ui.tool_options.shape.mode.clone();
+    let shown = if mode == "shape" { target(app) } else { None };
+    let path_shape = if mode == "path" { crate::shape_modes::path_shape(app) } else { None };
     let id = shown.as_ref().map(|(id, _)| *id);
-    let sh = shown.as_ref().map(|(_, sh)| sh);
+    let layer_sh = shown.as_ref().map(|(_, sh)| sh);
+    let sh = layer_sh.or(path_shape.as_ref());
     let locked = id.is_some_and(|id| {
         app.session.active().is_some_and(|st| {
             let locks = st.doc.effective_locks(id);
             locks.all || locks.pixels
         })
     });
+    let position_locked = id.is_some_and(|id| app.session.active().is_some_and(|st| st.doc.effective_locks(id).position));
     let fill = sh.map_or_else(|| app.ui.tool_options.shape_fill.then(|| default_fill(app)), |sh| sh.fill.clone());
     let stroke = sh.and_then(|sh| sh.stroke.as_ref());
     let paint = if sh.is_some() { stroke.map(|s| s.paint.clone()) } else { (app.ui.tool_options.stroke_width > 0.0).then(|| default_stroke(app)) };
@@ -174,42 +272,69 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     let mut change = None;
     let mut discrete_paint = false;
     let mut stroke_coalesce = None;
-    // Geometry fields keep their previous behaviour: they set the next shape's default and edit
-    // the selected live shape.
     let mut edit: Option<Value> = None;
     let doc_id = app.session.active().map(|st| st.doc.id);
     let key = |k: &str| doc_id.zip(id).map(|(doc, layer)| format!("shape-options-{doc:?}-{}-{k}", layer.0));
-    ui.push_id(("shape-toolbar", doc_id, id), |ui| {
+    let path_name = (mode == "path").then(|| app.ui.selected_path.as_deref().filter(|n| *n != "layer").unwrap_or("work").to_string());
+    ui.push_id(("shape-toolbar", doc_id, id, path_name), |ui| {
         ui.add_enabled_ui(!locked, |ui| {
-            label(ui, tl!("Fill:"));
-            if let Some(c) = crate::shape_paint_ui::swatch(app, ui, fill.as_ref(), fill_color(app), tl!("Fill color")) {
-                discrete_paint = c.discrete;
-                change = Some(Change::Fill(c.paint));
+            if mode == "shape" {
+                label(ui, tl!("Fill:"));
+                if let Some(c) = crate::shape_paint_ui::swatch(app, ui, fill.as_ref(), fill_color(app), tl!("Fill color")) {
+                    discrete_paint = c.discrete;
+                    change = Some(Change::Fill(c.paint));
+                }
+                label(ui, tl!("Stroke:"));
+                if let Some(c) = crate::shape_paint_ui::swatch(app, ui, paint.as_ref(), stroke_color(app), tl!("Stroke color")) {
+                    discrete_paint = c.discrete;
+                    change = Some(Change::Stroke(c.paint));
+                }
+                let max_width = 288.0_f32.max(width);
+                if crate::widgets::value_field(ui, &mut width, 0.0..=max_width, "px", 58.0).changed() && ui.is_enabled() {
+                    change = Some(Change::Width(width));
+                }
+                let closed = sh.is_none_or(|sh| sh.path.subpaths.iter().all(|s| s.closed));
+                let corners = sh.map_or(tool != Tool::EllipseShape, |sh| !matches!(sh.live, Some(LiveShape::Ellipse { .. })));
+                let key = id.map_or_else(|| "tool-stroke".to_string(), |_| format!("shape-toolbar-{doc_id:?}-{id:?}-stroke"));
+                if let Some(next) = crate::shape_stroke_ui::button(ui, &key, &style, &mut app.ui.stroke_editor, closed, corners, doc_id.zip(id), width > 0.0) {
+                    stroke_coalesce = Some(next.coalesce);
+                    change = Some(Change::Style(next.options));
+                }
+                crate::widgets::vline(ui, 22.0);
             }
-            label(ui, tl!("Stroke:"));
-            if let Some(c) = crate::shape_paint_ui::swatch(app, ui, paint.as_ref(), stroke_color(app), tl!("Stroke color")) {
-                discrete_paint = c.discrete;
-                change = Some(Change::Stroke(c.paint));
+            if mode != "pixels" {
+                let rect = sh.and_then(bounds);
+                let mut linked = app.ui.tool_options.shape_link_dimensions;
+                ui.add_enabled_ui(rect.is_some_and(|r| r[2] > 0.0 && r[3] > 0.0), |ui| {
+                    if crate::icons::button(ui, "link", 24.0, linked, tl!("Link width and height")).clicked() {
+                        linked = !linked;
+                    }
+                });
+                app.ui.tool_options.shape_link_dimensions = linked;
+                for height in [false, true] {
+                    let mut value = rect.map_or(0.0, |r| if height { r[3] } else { r[2] }) as f32;
+                    ui.add_enabled_ui(!position_locked && value.is_finite() && value > 0.0, |ui| {
+                        if dimension(ui, height, &mut value) {
+                            change = Some(Change::Size { height, value, linked });
+                        }
+                    });
+                }
             }
-            let max_width = 288.0_f32.max(width);
-            if crate::widgets::value_field(ui, &mut width, 0.0..=max_width, "px", 58.0).changed() && ui.is_enabled() {
-                change = Some(Change::Width(width));
-            }
-            let closed = sh.is_none_or(|sh| sh.path.subpaths.iter().all(|s| s.closed));
-            let corners = sh.map_or(tool != Tool::EllipseShape, |sh| !matches!(sh.live, Some(photocraft_doc::LiveShape::Ellipse { .. })));
-            let stroke_key = id.map_or_else(|| "tool-stroke".to_string(), |_| format!("shape-toolbar-{doc_id:?}-{id:?}-stroke"));
-            if let Some(next) = crate::shape_stroke_ui::button(ui, &stroke_key, &style, &mut app.ui.stroke_editor, closed, corners, doc_id.zip(id), width > 0.0)
-            {
-                stroke_coalesce = Some(next.coalesce);
-                change = Some(Change::Style(next.options));
-            }
+            // The mode dropdown's separator already precedes these fields in Pixels mode.
+            let separator = |ui: &mut egui::Ui| {
+                if mode != "pixels" {
+                    crate::widgets::vline(ui, 22.0);
+                }
+            };
+            // Geometry fields keep their previous behaviour: they set the next shape's default and
+            // edit the selected live shape layer.
             let o = &mut app.ui.tool_options;
             match tool {
                 Tool::Rectangle => {
-                    crate::widgets::vline(ui, 22.0);
+                    separator(ui);
                     label(ui, tl!("Radius:"));
-                    let mut r = match sh.and_then(|s| s.live.as_ref()) {
-                        Some(photocraft_doc::LiveShape::Rect { radii, .. }) => radii[0] as f32,
+                    let mut r = match layer_sh.and_then(|s| s.live.as_ref()) {
+                        Some(LiveShape::Rect { radii, .. }) => radii[0] as f32,
                         _ => o.corner_radius,
                     };
                     if crate::widgets::value_field(ui, &mut r, 0.0..=10000.0, "px", 62.0).changed() {
@@ -219,7 +344,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
                     }
                 }
                 Tool::Polygon => {
-                    crate::widgets::vline(ui, 22.0);
+                    separator(ui);
                     label(ui, tl!("Sides:"));
                     let mut s = o.polygon_sides as f32;
                     if crate::widgets::value_field(ui, &mut s, 3.0..=100.0, "", 48.0).changed() {
@@ -227,17 +352,17 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
                     }
                 }
                 Tool::Line => {
-                    crate::widgets::vline(ui, 22.0);
+                    separator(ui);
                     label(ui, tl!("Weight:"));
                     crate::widgets::value_field(ui, &mut o.line_weight, 1.0..=1000.0, "px", 58.0);
                 }
                 Tool::CustomShape => {
-                    crate::widgets::vline(ui, 22.0);
+                    separator(ui);
                     crate::preset_panels::shape_picker(app, ui);
                 }
                 _ if matches!(tool, Tool::PathSelection | Tool::DirectSelection) => {
-                    if let Some(photocraft_doc::LiveShape::Rect { radii, .. }) = sh.and_then(|s| s.live.as_ref()) {
-                        crate::widgets::vline(ui, 22.0);
+                    if let Some(LiveShape::Rect { radii, .. }) = layer_sh.and_then(|s| s.live.as_ref()) {
+                        separator(ui);
                         label(ui, tl!("Radius:"));
                         let mut r = radii[0] as f32;
                         if crate::widgets::value_field(ui, &mut r, 0.0..=10000.0, "px", 62.0).changed() {
@@ -319,7 +444,44 @@ mod tests {
     }
 
     #[test]
-    fn edits_respect_locks_and_mask_targets() {
+    fn dimensions_keep_live_geometry_and_each_drag_has_one_undo_step() {
+        let mut app = app(16);
+        let id = rectangle(&mut app);
+        app.run("shape.edit", json!({"layer": id.0, "radii": [1, 2, 3, 4]})).unwrap();
+        for value in [110.0, 120.0] {
+            apply(&mut app, Some(id), Change::Size { height: false, value, linked: true }, Some("drag-a".into())).unwrap();
+        }
+        assert_eq!(bounds(shape(&app, id)), Some([10.0, 20.0, 120.0, 60.0]));
+        let Some(LiveShape::Rect { radii, .. }) = shape(&app, id).live else { panic!("live rectangle") };
+        assert_eq!(radii, [1.0, 2.0, 3.0, 4.0]);
+        apply(&mut app, Some(id), Change::Size { height: true, value: 80.0, linked: true }, Some("drag-b".into())).unwrap();
+        assert_eq!(bounds(shape(&app, id)), Some([10.0, 20.0, 160.0, 80.0]));
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(bounds(shape(&app, id)), Some([10.0, 20.0, 120.0, 60.0]));
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(bounds(shape(&app, id)), Some([10.0, 20.0, 100.0, 50.0]));
+        app.run("edit.redo", json!({})).unwrap();
+        assert_eq!(bounds(shape(&app, id)), Some([10.0, 20.0, 120.0, 60.0]));
+    }
+
+    #[test]
+    fn custom_paths_and_lines_resize_without_replacing_their_geometry() {
+        let mut app = app(8);
+        let id = rectangle(&mut app);
+        let path = photocraft_engine::vector_cmds::path_json(&shape(&app, id).path);
+        app.run("shape.edit", json!({"layer": id.0, "path": path})).unwrap();
+        assert!(shape(&app, id).live.is_none());
+        apply(&mut app, Some(id), Change::Size { height: false, value: 200.0, linked: false }, None).unwrap();
+        assert_eq!(bounds(shape(&app, id)), Some([10.0, 20.0, 200.0, 50.0]));
+        assert!(shape(&app, id).live.is_none());
+        let id = LayerId(app.run("shape.create", json!({"kind": "line", "from": [10, 20], "to": [110, 20], "weight": 4})).unwrap()["layer"].as_u64().unwrap());
+        apply(&mut app, Some(id), Change::Size { height: false, value: 150.0, linked: false }, None).unwrap();
+        assert_eq!(shape(&app, id).live, Some(LiveShape::Line { from: [10.0, 20.0], to: [160.0, 20.0], weight: 4.0 }));
+        assert!(apply(&mut app, Some(id), Change::Size { height: true, value: 50.0, linked: false }, None).is_err());
+    }
+
+    #[test]
+    fn edits_respect_locks_mask_targets_and_invalid_dimensions() {
         let mut app = app(32);
         let id = rectangle(&mut app);
         let before = shape(&app, id).clone();
@@ -328,6 +490,13 @@ mod tests {
         assert!(apply(&mut app, Some(id), Change::Fill(Some(solid([1.0; 4]))), None).is_err());
         assert_eq!(shape(&app, id), &before);
         assert_eq!(app.ui.tool_options.shape_fill_color, defaults);
+        app.run("layer.setProps", json!({"layer": id.0, "locks": {"pixels": false, "position": true}})).unwrap();
+        assert!(apply(&mut app, Some(id), Change::Size { height: false, value: 120.0, linked: false }, None).is_err());
+        app.run("layer.setProps", json!({"layer": id.0, "locks": {"position": false}})).unwrap();
+        for value in [0.0, -1.0, f32::NAN, f32::INFINITY, 300001.0] {
+            assert!(apply(&mut app, Some(id), Change::Size { height: false, value, linked: true }, None).is_err());
+            assert_eq!(shape(&app, id), &before);
+        }
         app.ui.mask_target = true;
         assert!(target(&app).is_none());
         app.ui.mask_target = false;
@@ -422,29 +591,62 @@ mod tests {
     }
 
     #[test]
-    fn drawing_the_toolbar_does_not_clamp_large_strokes() {
+    fn dragging_width_label_updates_the_shape_and_undoes_in_one_step() {
         let mut app = app(8);
-        let id = LayerId(
-            app.run("shape.create", json!({"kind": "rect", "rect": [10, 20, 20, 10], "stroke": {"width": 500, "color": "#114488"}})).unwrap()["layer"]
-                .as_u64()
-                .unwrap(),
-        );
-        let before = shape(&app, id).clone();
-        let revision = app.session.active().unwrap().revision;
+        let id = rectangle(&mut app);
+        app.ui.tool_options.shape_link_dimensions = true;
         let mut h = harness(app);
-        h.run_steps(6);
-        assert_eq!(shape(h.state(), id), &before);
-        assert_eq!(h.state().session.active().unwrap().revision, revision);
-        assert!(!h.state().ui.status_error);
+        let label = h.query_all(egui_kittest::kittest::by().label("W:").include_labels()).next().unwrap().rect().center();
+        h.hover_at(label);
+        h.step();
+        h.event(egui::Event::PointerButton { pos: label, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.step();
+        for x in [10.0, 20.0, 40.0] {
+            h.event(egui::Event::PointerMoved(label + egui::vec2(x, 0.0)));
+            h.step();
+        }
+        h.event(egui::Event::PointerButton {
+            pos: label + egui::vec2(40.0, 0.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(3);
+        assert_eq!(bounds(shape(h.state(), id)), Some([10.0, 20.0, 120.0, 60.0]));
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(bounds(shape(h.state(), id)), Some([10.0, 20.0, 100.0, 50.0]));
+    }
+
+    #[test]
+    fn drawing_the_toolbar_does_not_clamp_large_strokes_or_zero_length_line_axes() {
+        for params in [
+            json!({"kind": "rect", "rect": [10, 20, 20, 10], "stroke": {"width": 500, "color": "#114488"}}),
+            json!({"kind": "line", "from": [10, 20], "to": [110, 20], "weight": 4}),
+        ] {
+            let mut app = app(8);
+            let is_line = params["kind"] == "line";
+            let id = LayerId(app.run("shape.create", params).unwrap()["layer"].as_u64().unwrap());
+            if is_line {
+                app.ui.tool = Tool::Line;
+            }
+            let before = shape(&app, id).clone();
+            let revision = app.session.active().unwrap().revision;
+            let mut h = harness(app);
+            h.run_steps(6);
+            assert_eq!(shape(h.state(), id), &before);
+            assert_eq!(h.state().session.active().unwrap().revision, revision);
+            assert!(!h.state().ui.status_error);
+        }
     }
 
     #[test]
     fn old_tool_settings_keep_their_color_behavior() {
         let mut saved = serde_json::to_value(crate::state::ToolOptions::default()).unwrap();
-        for key in ["shape_fill_color", "shape_stroke_color"] {
+        for key in ["shape_fill_color", "shape_stroke_color", "shape_link_dimensions"] {
             saved.as_object_mut().unwrap().remove(key);
         }
         let old: crate::state::ToolOptions = serde_json::from_value(saved).unwrap();
         assert!(old.shape_fill_color.is_none() && old.shape_stroke_color.is_none());
+        assert!(!old.shape_link_dimensions);
     }
 }

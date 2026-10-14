@@ -3156,6 +3156,12 @@ fontWeight	Italic	斜体
 	Sharpen Detail	シャープのディテール
 	Sharpen Masking	シャープのマスク
 	Sharpen Radius	シャープの半径
+	Constrain Proportions	縦横比を固定
+	Path Options	パスオプション
+	Show Path	パスを表示
+	Align Edges	エッジを整列
+	Unconstrained	制約なし
+	Proportional	縦横比を指定
 	Solid Color	べた塗り
 	Source Layer	ソースレイヤー
 	Spacing:	間隔:
