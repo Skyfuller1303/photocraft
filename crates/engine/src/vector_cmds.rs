@@ -635,6 +635,11 @@ pub fn shape_path(p: &Value) -> Result<Path> {
     Ok(vector::shapes::live_path(&live_from_params("shape.create", kind, p, None)?))
 }
 
+/// Live geometry shared by the shape-tool path mode's editing cache.
+pub fn shape_live(p: &Value) -> Result<LiveShape> {
+    live_from_params("shape.create", p.get("kind").and_then(Value::as_str).unwrap_or("rect"), p, None)
+}
+
 fn live_kind(l: &LiveShape) -> &'static str {
     match l {
         LiveShape::Rect { radii, .. } if radii.iter().any(|r| *r > 0.0) => "roundedRect",
@@ -1402,13 +1407,14 @@ fn path_fill(s: &mut Session, p: &Value) -> Result<Value> {
         let lock = locks.transparency;
         let surf = l.surface_mut().ok_or_else(|| EngineError::Other("Fill Path needs a pixel layer".into()))?;
         paint_coverage(surf, area, &cov, src, opacity, mode, lock);
+        surf.prune();
         Ok(())
     })?;
     Ok(Value::Null)
 }
 
 /// Composites `src` × coverage onto a surface over `area` (any pixel format).
-fn paint_coverage(surf: &mut photocraft_raster::Surface, area: Rect, cov: &[f32], src: [f32; 4], opacity: f32, mode: BlendMode, lock_alpha: bool) {
+pub(crate) fn paint_coverage(surf: &mut photocraft_raster::Surface, area: Rect, cov: &[f32], src: [f32; 4], opacity: f32, mode: BlendMode, lock_alpha: bool) {
     let fmt = surf.format();
     let ch = fmt.channels();
     let mut vals = surf.read_region(area);
@@ -1424,7 +1430,6 @@ fn paint_coverage(surf: &mut photocraft_raster::Surface, area: Rect, cov: &[f32]
         photocraft_raster::from_rgba_into(&fmt, out, px);
     }
     surf.write_region(area, &vals);
-    surf.prune();
 }
 
 /// Stroke Path's brush-based tools besides the Brush, Pencil and Eraser it renders itself: each

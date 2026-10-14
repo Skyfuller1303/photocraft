@@ -100,6 +100,7 @@ pub mod sample_cmds;
 pub mod sampler_cmds;
 pub mod select_extra_cmds;
 pub mod selection_cmds;
+pub mod shape_tool_cmds;
 pub mod slice_cmds;
 pub mod smart_cmds;
 pub mod smartselect_cmds;
