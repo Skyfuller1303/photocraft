@@ -41,6 +41,17 @@ fn draw_pixels(s: &mut Session, p: &Value) -> Result<Value> {
     if color.iter().any(|c| !c.is_finite()) {
         return Err(bad(CMD, "Color must be finite"));
     }
+    let active_layer = s.active().and_then(|st| st.active_layer);
+    let restrict_target = if matches!(crate::channel_cmds::target_of(p), crate::channel_cmds::Target::Pixels) {
+        p.get("layer")
+            .and_then(Value::as_u64)
+            .map(LayerId)
+            .filter(|target| Some(*target) != active_layer)
+            .and_then(|target| s.color_restrict.map(|channel| (target, channel)))
+    } else {
+        None
+    };
+    let before = restrict_target.and_then(|_| s.active().map(|st| st.doc.clone()));
     let damage = s.edit("Draw Pixel Shape", |doc, active| {
         let raster = photocraft_vector::fill_rasterizer(&path, photocraft_vector::DEFAULT_TOLERANCE);
         let area = raster.pixel_bounds().unwrap_or(Rect::EMPTY).intersect(&doc.bounds());
@@ -89,6 +100,9 @@ fn draw_pixels(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         surface.prune();
+        if let (Some((target, channel)), Some(before)) = (restrict_target, before.as_deref()) {
+            crate::channel_cmds::restrict_to_color(before, doc, target, channel);
+        }
         Ok(area)
     })?;
     Ok(json!({"damage": damage}))
@@ -106,7 +120,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Draw Pixel Shape",
         menu: &[],
         shortcut: None,
-        params: r##"{kind,rect/from/to/path: shape.create geometry,color: foreground,mode: blend mode,opacity: 0..100=100,antiAlias: bool=true,target: pixels|mask|quickMask|{channel:i},layer:id?} (drawing bounds limited to 8 GiB of tiles on 64-bit, 2 GiB on 32-bit)"##,
+        params: r##"{kind,rect/from/to/path: shape.create geometry,color: foreground,mode: blend mode,opacity: 0..100=100,antiAlias: bool=true,target: pixels|mask|quickMask|{channel:i},"layer":id?} (drawing bounds limited to 8 GiB of tiles on 64-bit, 2 GiB on 32-bit)"##,
         enabled: has_paintable,
         run: draw_pixels,
         journal: true,
