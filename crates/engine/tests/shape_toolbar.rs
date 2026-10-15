@@ -118,6 +118,108 @@ fn pixels_draw_in_grayscale_without_format_assumptions() {
 }
 
 #[test]
+fn pixel_shapes_follow_color_alpha_and_quick_mask_targets() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":16,"height":16,"background":"white"})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.execute("channel.target.slot3", json!({})).unwrap();
+    s.execute("shape.drawPixels", json!({"rect":[2,2,8,8],"color":"#000000"})).unwrap();
+    let [r, g, b, _] = rgba(&s, id, 4, 4);
+    assert!(r < 0.01 && g > 0.99 && b > 0.99, "targeted red channel: {r}, {g}, {b}");
+
+    s.execute("channel.new", json!({})).unwrap();
+    let before = rgba(&s, id, 4, 4);
+    s.execute("shape.drawPixels", json!({"rect":[2,2,8,8],"color":"#ffffff"})).unwrap();
+    assert_eq!(rgba(&s, id, 4, 4), before, "alpha target leaves pixels unchanged");
+    assert!(s.active().unwrap().doc.channels[0].surface.sample_channel(4, 4, 0) > 0.99);
+
+    s.execute("channel.target.composite", json!({})).unwrap();
+    s.execute("select.editInQuickMaskMode", json!({"on":true})).unwrap();
+    let before = rgba(&s, id, 4, 4);
+    s.execute("shape.drawPixels", json!({"rect":[2,2,8,8],"color":"#000000"})).unwrap();
+    assert_eq!(rgba(&s, id, 4, 4), before, "Quick Mask target leaves pixels unchanged");
+    assert!(s.active().unwrap().doc.quick_mask.as_ref().unwrap().surface.sample_channel(4, 4, 0) < 0.01);
+}
+
+#[test]
+fn pixel_shapes_refuse_hidden_layers_and_ancestor_groups_without_history_changes() {
+    let mut s = session(8);
+    let id = s.active().unwrap().active_layer.unwrap();
+    let initial_doc = s.active().unwrap().doc.clone();
+    s.execute("layer.setProps", json!({"visible":false})).unwrap();
+    let hidden_doc = s.active().unwrap().doc.clone();
+    let history = s.active().unwrap().history.past_len();
+    let err = s.execute("shape.drawPixels", json!({"rect":[2,2,8,8],"color":"#ff0000"})).unwrap_err().to_string();
+    assert!(err.contains("target layer is hidden"), "{err}");
+    assert_eq!(s.active().unwrap().doc, hidden_doc);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+
+    s.execute("layer.setProps", json!({"visible":true})).unwrap();
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    let group = s.active().unwrap().active_layer.unwrap();
+    assert_ne!(group, id);
+    s.execute("layer.setProps", json!({"layer":group.0,"visible":false})).unwrap();
+    s.execute("layer.select", json!({"layer":id.0})).unwrap();
+    let hidden_group_doc = s.active().unwrap().doc.clone();
+    let history = s.active().unwrap().history.past_len();
+    let err = s.execute("shape.drawPixels", json!({"rect":[2,2,8,8],"color":"#ff0000"})).unwrap_err().to_string();
+    assert!(err.contains("target layer is hidden"), "{err}");
+    assert_eq!(s.active().unwrap().doc, hidden_group_doc);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    assert_ne!(initial_doc, hidden_group_doc);
+}
+
+#[test]
+fn pixel_shapes_validate_an_explicit_raster_layer_instead_of_active_shape() {
+    let mut s = session(8);
+    let raster = s.active().unwrap().active_layer.unwrap();
+    s.execute("shape.create", json!({"kind":"rect","rect":[30,30,8,8]})).unwrap();
+    let active_shape = s.active().unwrap().active_layer.unwrap();
+    assert_ne!(raster, active_shape);
+    s.execute("shape.drawPixels", json!({"rect":[2,2,8,8],"color":"#ff0000","layer":raster.0})).unwrap();
+    assert!(rgba(&s, raster, 4, 4)[0] > 0.99);
+    assert_eq!(s.active().unwrap().active_layer, Some(active_shape));
+}
+
+#[test]
+fn explicit_pixel_layer_preserves_channel_routing_and_active_selection_on_undo() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":16,"height":16,"background":"white"})).unwrap();
+    let raster = s.active().unwrap().active_layer.unwrap();
+    s.execute("shape.create", json!({"kind":"rect","rect":[12,12,3,3]})).unwrap();
+    let active_shape = s.active().unwrap().active_layer.unwrap();
+    let selected = s.active().unwrap().selected_layers.clone();
+    s.execute("channel.target.slot3", json!({})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+
+    s.execute("shape.drawPixels", json!({"rect":[2,2,8,8],"color":"#000000","layer":raster.0})).unwrap();
+    let [r, g, b, _] = rgba(&s, raster, 4, 4);
+    assert!(r < 0.01 && g > 0.99 && b > 0.99, "explicit raster should remain cyan: {r}, {g}, {b}");
+    assert_eq!(s.active().unwrap().active_layer, Some(active_shape));
+    assert_eq!(s.active().unwrap().selected_layers, selected);
+
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc, before);
+    assert_eq!(s.active().unwrap().active_layer, Some(active_shape));
+    assert_eq!(s.active().unwrap().selected_layers, selected);
+
+    s.execute("select.deselectLayers", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().active_layer, None);
+    assert!(s.active().unwrap().selected_layers.is_empty());
+    let before_without_active = s.active().unwrap().doc.clone();
+    s.execute("shape.drawPixels", json!({"rect":[2,2,8,8],"color":"#000000","layer":raster.0})).unwrap();
+    let [r, g, b, _] = rgba(&s, raster, 4, 4);
+    assert!(r < 0.01 && g > 0.99 && b > 0.99, "explicit raster without active layer should remain cyan: {r}, {g}, {b}");
+    assert_eq!(s.active().unwrap().active_layer, None);
+    assert!(s.active().unwrap().selected_layers.is_empty());
+
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc, before_without_active);
+    assert_eq!(s.active().unwrap().active_layer, None);
+    assert!(s.active().unwrap().selected_layers.is_empty());
+}
+
+#[test]
 #[ignore = "release performance measurement on a 36 MP canvas"]
 fn pixel_shape_36mp() {
     let mut s = Session::new();
