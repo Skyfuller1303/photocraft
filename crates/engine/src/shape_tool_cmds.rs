@@ -43,11 +43,7 @@ fn draw_pixels(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let active_layer = s.active().and_then(|st| st.active_layer);
     let restrict_target = if matches!(crate::channel_cmds::target_of(p), crate::channel_cmds::Target::Pixels) {
-        p.get("layer")
-            .and_then(Value::as_u64)
-            .map(LayerId)
-            .filter(|target| Some(*target) != active_layer)
-            .and_then(|target| s.color_restrict.map(|channel| (target, channel)))
+        p.get("layer").and_then(Value::as_u64).map(LayerId).filter(|target| Some(*target) != active_layer).zip(s.color_restrict)
     } else {
         None
     };
