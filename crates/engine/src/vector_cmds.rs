@@ -647,7 +647,14 @@ fn live_from_params(cmd: &str, kind: &str, p: &Value, prev: Option<&LiveShape>) 
                     Some(Value::Null) => None,
                     Some(v) => {
                         let a: photocraft_doc::vector::LineArrowheads = serde_json::from_value(v.clone()).map_err(|e| bad(cmd, e.to_string()))?;
-                        if ![a.width, a.length].iter().all(|v| v.is_finite() && (0.0..=10000.0).contains(v)) {
+                        let previous = match prev {
+                            Some(LiveShape::Line { arrowheads: Some(previous), .. }) => Some(previous),
+                            _ => None,
+                        };
+                        let allowed = |value: f64, old: Option<f64>| {
+                            value.is_finite() && ((0.0..=10000.0).contains(&value) || old.is_some_and(|old| old > 10000.0 && value == old))
+                        };
+                        if !allowed(a.width, previous.map(|heads| heads.width)) || !allowed(a.length, previous.map(|heads| heads.length)) {
                             return Err(bad(cmd, "Arrowhead dimensions must be 0..10000"));
                         }
                         if !a.concavity.is_finite() || !(-50.0..=50.0).contains(&a.concavity) {
@@ -1010,11 +1017,39 @@ fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
             // Explicit radii on a plain rectangle keep it a (now rounded) rectangle.
             let kind = if kind == "rect" && radii(p).is_some_and(|r| r.iter().any(|v| *v > 0.0)) { "roundedRect".to_string() } else { kind };
             let l = live_from_params(CMD, &kind, p, sh.live.as_ref())?;
+            // `smooth_indents` has no geometric effect on a regular polygon. Keep a transformed
+            // path's exact control points when only this stored editing option changes.
+            let smooth_indents_only = matches!(
+                (sh.live.as_ref(), &l),
+                (
+                    Some(LiveShape::Polygon {
+                        rect: old_rect,
+                        sides: old_sides,
+                        star_ratio: old_ratio,
+                        corner_radius: old_radius,
+                        smooth_indents: old_smooth,
+                    }),
+                    LiveShape::Polygon {
+                        rect: new_rect,
+                        sides: new_sides,
+                        star_ratio: new_ratio,
+                        corner_radius: new_radius,
+                        smooth_indents: new_smooth,
+                    }
+                ) if *old_ratio == 1.0
+                    && *new_ratio == 1.0
+                    && old_rect == new_rect
+                    && old_sides == new_sides
+                    && old_radius == new_radius
+                    && old_smooth != new_smooth
+            );
             // A transformed live shape's path may carry nonuniform corner scaling
             // that its scalar radii cannot represent. Re-entering unchanged values
             // must not regenerate the outline and silently discard that geometry.
             if sh.live.as_ref() != Some(&l) {
-                sh.path = vector::shapes::live_path(&l);
+                if !smooth_indents_only {
+                    sh.path = vector::shapes::live_path(&l);
+                }
                 sh.live = Some(l);
                 sh.psd_raw = None;
             }

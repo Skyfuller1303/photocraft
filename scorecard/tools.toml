@@ -192,7 +192,7 @@ id = "TOOL-214-12"
 target = "Shapes: on-canvas corner radius handles, shape feather, selection to shape with tolerance"
 status = "partial"
 issue = 214
-note = "On-canvas corner-radius handles on live rectangles with Path Selection and Move + Show Transform Controls; linked/per-corner editing, rotated/flipped views and one-step Undo (shape_canvas.rs). select.convertToShape supports tolerance (vector_cmds.rs). Shape feather remains open."
+note = "On-canvas corner-radius handles on live rectangles with Path Selection and Move + Show Transform Controls; linked/per-corner editing, rotated/flipped views and one-step Undo (corner_radius.rs; corner_radius_tests.rs). select.convertToShape supports tolerance (vector_cmds.rs). Shape feather remains open."
 
 [[item]]
 id = "TOOL-214-13"

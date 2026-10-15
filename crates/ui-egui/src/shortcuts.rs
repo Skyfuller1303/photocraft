@@ -408,7 +408,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if crate::distort_ui::keys(app, ctx) {
         return;
     }
-    if crate::shape_canvas::keys(app, ctx) {
+    if crate::corner_radius::keys(app, ctx) {
         return;
     }
     // Free Transform: ↩ commits, Esc cancels.

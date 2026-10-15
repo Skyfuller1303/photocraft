@@ -190,6 +190,42 @@ fn path_options_change_view_only_and_line_end_edits_change_active_shape() {
 }
 
 #[test]
+fn editing_another_arrowhead_option_preserves_scaled_dimensions_and_shape_history() {
+    let mut a = app();
+    a.ui.tool = Tool::Line;
+    let id = a.run("shape.create", json!({"kind":"line","from":[20,40],"to":[120,40],"arrowheads":{"end":true,"width":6000,"length":10}})).unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+    a.run("shape.edit", json!({"layer":id,"transform":[2,0,0,2,0,0]})).unwrap();
+    let before = a.session.active().unwrap().doc.clone();
+    let revision = a.session.active().unwrap().revision;
+    let history = a.session.active().unwrap().history.past_len();
+    let mut h = harness(a);
+
+    h.get_by_label("Path Options").click();
+    h.run_steps(6);
+
+    let st = h.state().session.active().unwrap();
+    assert_eq!(st.doc, before, "opening the popup must not edit the shape");
+    assert_eq!(st.revision, revision);
+    assert_eq!(st.history.past_len(), history);
+    let LayerContent::Shape(sh) = &st.doc.layer(photocraft_doc::LayerId(id)).unwrap().content else { panic!() };
+    assert!(matches!(&sh.live, Some(LiveShape::Line { arrowheads: Some(a), .. }) if a.width == 12000.0));
+
+    h.get_by_label("Start").click();
+    h.run_steps(6);
+    let st = h.state().session.active().unwrap();
+    assert!(!h.state().ui.status_error, "editing another arrowhead option should preserve the existing width");
+    assert_eq!(st.history.past_len(), history + 1);
+    let LayerContent::Shape(sh) = &st.doc.layer(photocraft_doc::LayerId(id)).unwrap().content else { panic!() };
+    assert!(matches!(&sh.live, Some(LiveShape::Line { arrowheads: Some(a), .. }) if a.start && a.width == 12000.0));
+    let options = &h.state().ui.tool_options.shape;
+    assert!(options.validate().is_ok(), "oversize live dimensions must not poison new-shape defaults");
+    assert!(options.arrowheads.start);
+    assert_eq!((options.arrowheads.width, options.arrowheads.length), (10.0, 20.0));
+}
+
+#[test]
 fn control_shape_options_validate_before_applying_any_field() {
     let mut a = app();
     let ctx = egui::Context::default();

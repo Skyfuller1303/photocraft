@@ -143,8 +143,8 @@ pub(crate) fn shape_geometry(app: &PhotocraftApp, tool: Tool, start: [f64; 2], e
 
 /// The box `[x0, y0, x1, y1]` a Shape-tool drag draws (a line's: its ends'), which snaps while
 /// Space repositions it (`snap_ui`). None when too small to draw.
-pub fn shape_bounds(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<[f64; 4]> {
-    let g = shape_geometry(o, tool, start, end, mods)?;
+pub fn shape_bounds(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<[f64; 4]> {
+    let g = shape_geometry(app, tool, start, end, mods)?;
     if tool == Tool::Line {
         let a: [f64; 2] = serde_json::from_value(g["from"].clone()).ok()?;
         let b: [f64; 2] = serde_json::from_value(g["to"].clone()).ok()?;
@@ -1089,7 +1089,6 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         }
         // The segment the Pen's Auto Add/Delete would add an anchor to, or the anchor it would delete.
         crate::anchor_tools::draw_pen_hover(app, painter, &to_scr, accent, painter.ctx().input(|i| i.modifiers));
-        crate::corner_radius::draw(app, painter, &to_scr, accent);
     }
     // Pen path in progress, with handles of the last knot and a rubber band to the pointer. While
     // ⌘/Ctrl drags it, Direct Selection draws its preview instead.

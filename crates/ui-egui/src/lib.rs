@@ -180,7 +180,6 @@ pub mod scrollbars;
 mod scrub_wrap;
 pub mod select_mask_view;
 pub mod served_fonts;
-mod shape_canvas;
 pub mod shape_dialog;
 pub(crate) mod shape_fill_ui;
 mod shape_modes;
@@ -704,8 +703,6 @@ pub struct PhotocraftApp {
     pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
     /// Move-tool ⇧/⌥ drag state (move_mods).
     pub(crate) move_mods: move_mods::MoveDrag,
-    /// Live rectangle corner-radius gesture (shape_canvas).
-    pub(crate) shape_canvas: shape_canvas::State,
     /// Cached document for a modal text Style Options color preview.
     pub(crate) text_style_preview: Option<type_panels_ui::color_picker::Preview>,
     /// The run of arrow-key nudges that share one History state (nudge_bundle).
@@ -910,7 +907,6 @@ impl PhotocraftApp {
             clip_read_for_paste: false,
             transform_preview: None,
             move_mods: Default::default(),
-            shape_canvas: Default::default(),
             nudge_bundle: Default::default(),
             style_preview: None,
             text_style_preview: None,
@@ -1187,6 +1183,7 @@ impl PhotocraftApp {
     }
 
     pub fn sync_views(&mut self) {
+        crate::corner_radius::cancel_stale(self);
         type_transform::cancel_stale(self);
         crate::cam_transform::cancel_stale(self);
         crate::lasso_ui::cancel_stale(self);

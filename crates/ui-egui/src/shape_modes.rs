@@ -321,7 +321,20 @@ fn options_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
             Ok(())
         };
         match result {
-            Ok(()) => app.ui.tool_options.shape.arrowheads = heads,
+            Ok(()) => {
+                let options = &mut app.ui.tool_options.shape.arrowheads;
+                options.start = heads.start;
+                options.end = heads.end;
+                options.concavity = heads.concavity;
+                // A transformed selected line can have dimensions outside the input range.
+                // Keep those values on its live shape without making new-shape defaults invalid.
+                if (0.0..=10000.0).contains(&heads.width) {
+                    options.width = heads.width;
+                }
+                if (0.0..=10000.0).contains(&heads.length) {
+                    options.length = heads.length;
+                }
+            }
             Err(e) => {
                 app.ui.status = e;
                 app.ui.status_error = true;
