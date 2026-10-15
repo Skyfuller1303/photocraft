@@ -147,7 +147,7 @@ impl Placement {
         let base = if link { anchor } else { (0.0, 0.0) };
         let origin = (base.0 + f64::from(phase.0), base.1 + f64::from(phase.1));
         let s = f64::from(scale);
-        let inv_scale = if s.is_finite() && s > 1e-3 { 1.0 / s } else { 1.0 };
+        let inv_scale = if s.is_finite() && s > 0.0 { 1.0 / s } else { 1.0 };
         let a = f64::from(angle).to_radians();
         Placement { origin, cs: (a.cos(), a.sin()), inv_scale }
     }

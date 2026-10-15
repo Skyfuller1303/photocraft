@@ -90,6 +90,19 @@ fn pattern_lookup_placement_and_premultiplied_sampling() {
 }
 
 #[test]
+fn tiny_positive_pattern_scale_is_preserved_in_sampling_and_shape_rendering() {
+    let p = pattern(SampleType::F32, ColorMode::Rgb);
+    let scale = 0.0005;
+    let placement = photocraft_vector::pattern::Placement::anchored((8.0, 8.0), true, (0.0, 0.0), scale, 0.0);
+    let mapped = placement.map(10.5, 10.5);
+    assert!((mapped.0 - 5000.0).abs() < 0.001 && (mapped.1 - 5000.0).abs() < 0.001, "{mapped:?}");
+    let expected = Tile::new(&p).unwrap().sample(mapped.0, mapped.1);
+    let paint = Fill::Pattern { id: p.id.clone(), name: p.name.clone(), scale, angle: 0.0, link: true, phase: (0.0, 0.0) };
+    let shape = ShapeLayer { path: photocraft_vector::shapes::rounded_rect(8.0, 8.0, 16.0, 16.0, [0.0; 4]), fill: Some(paint), ..Default::default() };
+    let rendered = render_shape_with_patterns(&shape, PixelFormat::RGBA32F, Rect::new(0, 0, 32, 32), std::slice::from_ref(&p));
+    close(rendered.rgba(10, 10), expected, 0.001);
+}
+#[test]
 fn oversized_sparse_pattern_samples_without_a_second_full_surface() {
     let p = Pattern {
         id: "large".into(),
