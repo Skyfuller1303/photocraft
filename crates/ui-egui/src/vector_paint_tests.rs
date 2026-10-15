@@ -1,7 +1,10 @@
 //! Pointer, keyboard, colour precision and history regressions for shape appearance controls.
 use super::*;
 use egui::{Event, Key, Modifiers, PointerButton};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use photocraft_doc::ShapeLayer;
 
 fn app(mode: &str, depth: u32) -> PhotocraftApp {
@@ -71,6 +74,31 @@ fn harness(app: PhotocraftApp, properties: bool) -> Harness<'static, PhotocraftA
 fn pointer(h: &mut Harness<'_, PhotocraftApp>, pos: Pos2, pressed: bool) {
     h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
     h.step();
+}
+
+fn set_spin_value(h: &mut Harness<'_, PhotocraftApp>, from: f64, to: &str) {
+    h.get_all_by_role(egui::accesskit::Role::SpinButton)
+        .find(|node| node.accesskit_node().numeric_value() == Some(from))
+        .unwrap_or_else(|| panic!("spin button with value {from} not found"))
+        .click();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(Event::Text(to.to_string()));
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+}
+
+fn change_swatch_color(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
+    h.get_by_label(label).click();
+    h.run_steps(4);
+    h.get_by_label("Color Picker").click();
+    h.run_steps(4);
+    h.get_by_role(egui::accesskit::Role::TextInput).click();
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(Event::Text("ff8800".into()));
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
 }
 
 #[test]
@@ -270,6 +298,68 @@ fn selected_shape_style_is_available_when_absent_and_dismissal_does_not_enable_i
         assert!(shape(h.state()).stroke.is_none());
         h.state_mut().run("edit.redo", json!({})).unwrap();
         assert_eq!(shape(h.state()).stroke.as_ref().unwrap().dashes, [0.0, 2.0]);
+    }
+}
+
+#[test]
+fn properties_gradient_scale_focus_sessions_keep_separate_undo_steps() {
+    let mut app = app("rgb", 8);
+    let gradient = photocraft_doc::Fill::gradient(
+        vec![(0.0, photocraft_doc::Color::BLACK), (1.0, photocraft_doc::Color::WHITE)],
+        0.0,
+        1.0,
+        photocraft_doc::GradientStyle::Linear,
+        false,
+    );
+    let fill = photocraft_engine::vector_cmds::shape_paint_params(Some(&gradient), None)["fill"].clone();
+    app.run("shape.create", json!({"rect": [20, 20, 80, 60], "fill": fill})).unwrap();
+    let original = app.session.active().unwrap().doc.clone();
+    let history = app.session.active().unwrap().history.past_len();
+    let mut h = harness(app, true);
+
+    h.get_by_label("Set shape fill type").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.active().unwrap().doc, original, "opening paint popup does not edit the shape");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().session.active().unwrap().doc, original, "dismissing unchanged popup does not edit the shape");
+
+    h.get_by_label("Set shape fill type").click();
+    h.run_steps(3);
+    set_spin_value(&mut h, 100.0, "101");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Tab);
+    h.run_steps(2);
+    assert!(
+        h.get_all_by_role(egui::accesskit::Role::SpinButton)
+            .find(|node| node.accesskit_node().numeric_value() == Some(101.0))
+            .is_some_and(|node| node.is_focused())
+    );
+    set_spin_value(&mut h, 101.0, "102");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 2);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    let Some(photocraft_doc::Fill::Gradient { scale, .. }) = &shape(h.state()).fill else { panic!("gradient fill preserved") };
+    assert!((*scale - 1.01).abs() < 1e-5, "undo returns 102% to 101%, got {}%", *scale * 100.0);
+}
+
+#[test]
+fn choosing_shape_stroke_paint_enables_only_nonpositive_widths_in_both_editors() {
+    for properties in [true, false] {
+        for width in [0.0, 0.25] {
+            let mut app = app("rgb", 8);
+            let id = app.run("shape.create", json!({"rect": [20, 20, 80, 60]})).unwrap()["layer"].as_u64().unwrap();
+            app.run("shape.edit", json!({"layer": id, "stroke": {"width": width, "color": "#114488"}})).unwrap();
+            let original = shape(&app).stroke.clone();
+            let history = app.session.active().unwrap().history.past_len();
+            let mut h = harness(app, properties);
+            change_swatch_color(&mut h, if properties { "Set shape stroke type" } else { "Stroke color" });
+            let stroke = shape(h.state()).stroke.as_ref().unwrap();
+            assert_eq!(stroke.width, if width <= 0.0 { 3.0 } else { width }, "properties={properties}, width={width}");
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1, "properties={properties}, width={width}");
+            h.state_mut().run("edit.undo", json!({})).unwrap();
+            assert_eq!(shape(h.state()).stroke, original, "properties={properties}, width={width}");
+        }
     }
 }
 
