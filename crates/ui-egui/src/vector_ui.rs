@@ -1333,7 +1333,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                 let mut patch = if next.paint.is_none() {
                     json!({"stroke": null})
                 } else {
-                    json!({"stroke": {"color": photocraft_engine::vector_cmds::shape_paint_params(next.paint.as_ref(),None)["fill"], "width": sh.stroke.as_ref().map_or(3.0, |s| s.width)}})
+                    json!({"stroke": {"color": photocraft_engine::vector_cmds::shape_paint_params(next.paint.as_ref(),None)["fill"], "width": sh.stroke.as_ref().map_or(3.0, |s| crate::vector_ui::enabled_stroke_width(s.width))}})
                 };
                 if !next.discrete && let Some(group) = crate::shape_options::edit_key(ui.ctx()) {
                     patch["coalesce"] = json!(format!("{}-{group}",key("stroke")));
@@ -1451,6 +1451,9 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
             });
         }
     }
+    // Track focus transitions on passes without a paint edit too, so returning to a field starts
+    // a new undo group.
+    let _ = crate::shape_options::edit_key(ui.ctx());
 }
 
 // ---------------------------------------------------------------------------------------------

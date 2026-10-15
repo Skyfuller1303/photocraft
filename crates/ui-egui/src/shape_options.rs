@@ -155,7 +155,7 @@ fn apply(app: &mut PhotocraftApp, id: Option<LayerId>, change: Change, coalesce:
             Change::Stroke(Some(fill)) => {
                 let mut stroke = if sh.stroke.is_none() { app.ui.tool_options.shape_stroke.params() } else { json!({}) };
                 stroke["fill"] = photocraft_engine::vector_cmds::shape_paint_params(Some(fill), None)["fill"].clone();
-                stroke["width"] = json!(stroke_width);
+                stroke["width"] = json!(crate::vector_ui::enabled_stroke_width(stroke_width));
                 json!({"stroke": stroke})
             }
             Change::Width(w) if *w <= 0.0 => json!({"stroke": null}),
@@ -218,7 +218,7 @@ fn apply(app: &mut PhotocraftApp, id: Option<LayerId>, change: Change, coalesce:
             }
         }
         Change::Stroke(fill) => {
-            o.stroke_width = if fill.is_some() { stroke_width } else { 0.0 };
+            o.stroke_width = if fill.is_some() { crate::vector_ui::enabled_stroke_width(stroke_width) } else { 0.0 };
             if let Some(Fill::Solid(color)) = &fill {
                 let [r, g, b] = color.to_rgb();
                 o.shape_stroke_color = Some([r, g, b, color.alpha]);
