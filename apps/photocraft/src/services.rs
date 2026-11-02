@@ -433,6 +433,7 @@ fn save_through(
     ctl.progress(ENCODE_SHARE, "Writing");
     // The last bit is the flush and rename after the last chunk: 100% only once they're done.
     write(path, &r.bytes, &|f| ctl.progress(ENCODE_SHARE + (0.99 - ENCODE_SHARE) * f, ""))?;
+    ctl.saved_bytes(&r.bytes);
     ctl.progress(1.0, "");
     Ok(r.warnings)
 }
@@ -668,6 +669,8 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         }) as photocraft_ui_egui::AutomationCommandFn
     });
     Services {
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        cloud_data_dir: crate::app_dirs::config_dir(),
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
             crate::crash_guard::guard("Open", || {
                 photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())

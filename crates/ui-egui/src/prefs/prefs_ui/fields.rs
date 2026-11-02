@@ -14,6 +14,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             info.extend(gpu_memory_lines(app));
             f.insert("__gpuInfo".into(), json!(info));
             f.insert("__gpuAdapters".into(), json!(app.perf.gpu_info.adapters));
+            #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+            f.entry("__askWhereToSave").or_insert_with(|| json!(app.cloud.ask_setting()));
             let system = system_theme(app, ui.ctx());
             prefs_body(ui, f, system);
         }
@@ -168,6 +170,8 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
     let mut values = f.get("values").cloned().unwrap_or(Value::Null);
     // The dialog follows the language being edited, so a change shows before OK.
     let lang = crate::i18n::Lang::from_pref(values.pointer("/interface/language").and_then(Value::as_str).unwrap_or("auto"));
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    let mut ask_where_to_save = None;
     let mut search = f.get("__search").and_then(Value::as_str).unwrap_or("").to_string();
     crate::widgets::text_field(ui, ui.scope_id().with("prefs-search"), &mut search, tl!("Search settings…"), ui.available_width(), false);
     let found = preference_sections(&values, &search);
@@ -235,6 +239,15 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
                     ui.label(RichText::new(tl!("These settings aren't available in PhotoCraft yet.")).color(t.text_faint));
                 } else if let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut) {
                     section_fields(ui, &section, obj, &order, lang, system, filter);
+                    // Save As asks first whether to save to CraftCloud or on this computer.
+                    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+                    if section == "fileHandling"
+                        && let Some(mut ask) = f.get("__askWhereToSave").and_then(Value::as_bool)
+                        && (filter.is_empty() || "ask where to save".contains(&filter.to_lowercase()))
+                        && crate::widgets::checkbox(ui, &mut ask, "Ask where to save").changed()
+                    {
+                        ask_where_to_save = Some(ask);
+                    }
                     if section == "fileHandling" {
                         ui.label(
                             RichText::new(tl!("0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized."))
@@ -264,6 +277,10 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
             });
         });
     });
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    if let Some(ask) = ask_where_to_save {
+        f.insert("__askWhereToSave".into(), json!(ask));
+    }
     f.insert("section".into(), json!(section));
     f.insert("__search".into(), json!(search));
     f.insert("values".into(), values);

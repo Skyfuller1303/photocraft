@@ -184,6 +184,21 @@ fn invoke_shell_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
 
 fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Result<Option<Value>, String> {
     let result = match id {
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        "file.craftcloud.open" => {
+            app.cloud.begin_open();
+            Ok(Value::Null)
+        }
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        "file.craftcloud.save" => {
+            app.cloud.begin_save();
+            Ok(Value::Null)
+        }
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        "file.craftcloud.save_psd" => {
+            app.cloud.begin_save_psd();
+            Ok(Value::Null)
+        }
         // ⌘↩ / Ctrl+Enter (#306): load the path selected in the Paths panel (or the one being
         // drawn) as a selection.
         "path.toSelection" if params.get("name").is_none() => crate::vector_ui::path_to_selection(app, params.clone()),

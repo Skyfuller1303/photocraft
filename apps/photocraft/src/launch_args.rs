@@ -28,6 +28,10 @@ pub(crate) struct LaunchArgs {
     /// Files to open. On Windows and Linux they open as new tabs in the PhotoCraft already running.
     /// Put `--` before a name that starts with `-`
     pub(crate) files: Vec<PathBuf>,
+    /// CraftCloud links delivered by the launcher or a file manager. Kept separate from paths so
+    /// they can never reach the local-file opener.
+    #[arg(skip)]
+    pub(crate) cloud_links: Vec<String>,
     /// Start with the CPU renderer for this launch (after a graphics driver crash)
     #[arg(long)]
     pub(crate) safe_gpu: bool,
@@ -167,6 +171,18 @@ pub(crate) fn parse(mut cmd: Command, args: impl IntoIterator<Item = OsString>) 
     let argv = std::iter::once(OsString::from("photocraft")).chain(args.iter().cloned());
     let matches = cmd.try_get_matches_from_mut(argv).map_err(|e| name_env_vars(e, &cmd, &args))?;
     let mut launch = LaunchArgs::from_arg_matches(&matches)?;
+    // Clap parses positional arguments as paths. Split CraftCloud links immediately so neither
+    // file-name conversion nor the local-file opener can mistake a URL for a path.
+    let mut files = Vec::with_capacity(launch.files.len());
+    for file in std::mem::take(&mut launch.files) {
+        match file.to_str() {
+            Some(link) if link.split_once("://").is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("craftcloud")) => {
+                launch.cloud_links.push(link.to_owned())
+            }
+            _ => files.push(file),
+        }
+    }
+    launch.files = files;
     // Only the control server reads a token, so a stale exported pair doesn't stop a launch.
     if launch.control.is_some() {
         conflict(&mut cmd, &matches, "control_token", "control_token_file")?;
@@ -299,6 +315,30 @@ mod tests {
         let parsed = parse_args(&["--control-token-file", "/tmp/token", "--new-instance"]).unwrap();
         assert_eq!(parsed.auth.control_token_file.as_deref(), Some(std::path::Path::new("/tmp/token")));
         assert!(parsed.launch_options.is_empty() && !parsed.in_window_menus, "{:?}", parsed.launch_options);
+    }
+
+    #[test]
+    fn cloud_links_are_separated_from_local_paths_without_validation() {
+        let parsed = parse_args(&[
+            "--safe-gpu",
+            "photo.psd",
+            "craftcloud://open?server=https%3A%2F%2Fcloud.example&file=abc",
+            "craftcloud://open?server=bad&file=",
+            "CRAFTCLOUD://open?server=https%3A%2F%2Fcloud.example&file=abc",
+            "folder/local.pcraft",
+        ])
+        .unwrap();
+
+        assert_eq!(parsed.file_names().openable, ["photo.psd", "folder/local.pcraft"]);
+        assert_eq!(
+            parsed.cloud_links,
+            [
+                "craftcloud://open?server=https%3A%2F%2Fcloud.example&file=abc",
+                "craftcloud://open?server=bad&file=",
+                "CRAFTCLOUD://open?server=https%3A%2F%2Fcloud.example&file=abc",
+            ]
+        );
+        assert!(parsed.safe_gpu);
     }
 
     #[test]

@@ -166,10 +166,18 @@ pub fn system_title_bar(app: &PhotocraftApp) -> bool {
 /// document open. With Preferences › Interface › Show File Name In Title off, the file name
 /// drops out and only the app name (and the `*`) remains (#5037).
 pub fn window_title(app: &PhotocraftApp) -> String {
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    let cloud =
+        app.session.active().and_then(|document| app.cloud.workspace_label(document.doc.id)).map(|workspace| format!(" ☁ {workspace}")).unwrap_or_default();
+    #[cfg(not(all(feature = "craftcloud", not(target_arch = "wasm32"))))]
+    let cloud = String::new();
     if !app.session.prefs().interface.show_file_name_in_title {
-        return format!("{}PhotoCraft", if app.session.active().is_some_and(|d| d.is_dirty()) { "*" } else { "" });
+        return format!("{}PhotoCraft{cloud}", if app.session.active().is_some_and(|d| d.is_dirty()) { "*" } else { "" });
     }
-    app.session.active().map(|d| format!("{}{} \u{2014} PhotoCraft", if d.is_dirty() { "*" } else { "" }, d.doc.name)).unwrap_or_else(|| "PhotoCraft".into())
+    app.session
+        .active()
+        .map(|d| format!("{}{} \u{2014} PhotoCraft{cloud}", if d.is_dirty() { "*" } else { "" }, d.doc.name))
+        .unwrap_or_else(|| "PhotoCraft".into())
 }
 
 /// Keep the OS window title (and the taskbar / Alt-Tab entry) on the active file. Sends

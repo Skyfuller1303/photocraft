@@ -37,6 +37,8 @@ impl PhotocraftApp {
         let mut app = Self {
             session,
             ui: UiState::default(),
+            #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+            cloud: crate::cloud::Runtime::new(services.cloud_data_dir.as_deref()),
             services,
             canvases: HashMap::new(),
             navigator_textures: HashMap::new(),

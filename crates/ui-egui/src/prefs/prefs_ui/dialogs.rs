@@ -321,7 +321,13 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     match f.get("__prefsui").and_then(Value::as_str).unwrap_or("") {
         "prefs" => {
             let values = f.get("values").cloned().unwrap_or(Value::Null);
-            app.run("prefs.set", json!({"path": "", "value": values}))
+            let result = app.run("prefs.set", json!({"path": "", "value": values}))?;
+            // CraftCloud's Save As question is an app setting beside the engine's preferences.
+            #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+            if let Some(ask) = f.get("__askWhereToSave").and_then(Value::as_bool) {
+                app.cloud.set_asks_where_to_save(ask);
+            }
+            Ok(result)
         }
         "shortcuts" => {
             let overrides = f.get("overrides").cloned().unwrap_or(json!({}));

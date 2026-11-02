@@ -171,6 +171,23 @@ impl PhotocraftApp {
             self.run("layer.smartObjects.saveContents", serde_json::json!({}))?;
             return Ok(serde_json::json!({"path": "smart object", "warnings": []}));
         }
+        // Without a file name the user is asked where to save first: CraftCloud or this computer.
+        // "Save on this computer" continues in `save_dialog_flow_native`.
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        {
+            if path.is_none()
+                && let Some(doc) = self.session.active().map(|st| st.doc.id)
+                && self.cloud.asks_where_to_save()
+            {
+                self.cloud.open_save_chooser(crate::cloud::save_chooser::Chooser::new(doc, choices, plain_save));
+                return Ok(serde_json::json!({"path": null, "warnings": [], "chooser": true}));
+            }
+        }
+        self.save_dialog_flow_native(path, choices, plain_save)
+    }
+
+    /// [`Self::save_dialog_flow`] once it is settled that the file is saved on this computer.
+    pub(crate) fn save_dialog_flow_native(&mut self, path: Option<String>, choices: FormatChoices, plain_save: bool) -> Result<Value, String> {
         if let Some(path) = path {
             return self.save_to(path, choices);
         }
@@ -408,14 +425,44 @@ impl PhotocraftApp {
             return jobs_ui::start_save(self, path, settings.clone(), copy, save, false);
         }
         let st = self.session.active().ok_or("no document")?;
-        let (doc, written, previous) = (st.doc.id, st.revision, st.saved_revision);
+        let (doc, written, previous, previous_path) = (st.doc.id, st.revision, st.saved_revision, st.path.clone());
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&st.doc, &path, settings)?;
         let write = self.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
         let revision = saved_revision_after_write(!self.services.write_unconfirmed, written, previous);
         self.saved(doc, revision, &path, &warnings, copy);
+        self.after_local_save(doc, &path, previous_path.as_deref(), Some(bytes), copy);
         Ok(Some((path, warnings)))
+    }
+
+    /// After a successful user save, send the exact local snapshot to CraftCloud when this path
+    /// is bound or a first Cloud save is pending. An ordinary Save As to another path detaches the
+    /// prior identity; a PSD first-save copy never retargets the source document.
+    pub(crate) fn after_local_save(&mut self, doc: DocId, path: &str, previous_path: Option<&str>, bytes: Option<Vec<u8>>, copy: bool) {
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        {
+            let pending_new = self.cloud.has_pending_new_file(doc);
+            if copy && !pending_new {
+                return;
+            }
+            if !pending_new && previous_path.is_some_and(|previous| !photocraft_engine::file_cmds::same_file(previous, path)) {
+                self.cloud.detach_document(doc);
+                return;
+            }
+            if let Some(bytes) = bytes
+                && let Err(error) = self.cloud.on_local_save(doc, path, bytes)
+            {
+                notices::error(self, format!("CraftCloud upload failed: {error}"));
+            }
+        }
+        #[cfg(not(all(feature = "craftcloud", not(target_arch = "wasm32"))))]
+        {
+            let _ = (doc, path, previous_path, bytes);
+            if copy {
+                return;
+            }
+        }
     }
 
     /// After `saver` was written to `path`, any other open document bound to that file no longer
@@ -631,6 +678,10 @@ impl PhotocraftApp {
         })
     }
 }
+
+#[cfg(all(test, feature = "craftcloud", not(target_arch = "wasm32")))]
+#[path = "../cloud_save_tests.rs"]
+mod cloud_save_tests;
 
 /// The New Document dialog's key in the preferences' `dialogs` map.
 const NEW_DOCUMENT: &str = "file.new";

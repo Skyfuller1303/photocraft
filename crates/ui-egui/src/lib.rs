@@ -24,6 +24,8 @@ macro_rules! tl {
 }
 mod brush_mode_menu;
 pub mod canvas;
+#[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+pub mod cloud;
 pub mod control;
 pub mod dialogs;
 pub mod dock;
@@ -324,6 +326,9 @@ pub struct PhotocraftApp {
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
+    /// Ephemeral Cloud picker and link state; never persisted with UI preferences.
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    pub(crate) cloud: cloud::Runtime,
     /// Canvas caches per (document, display): CPU textures hold monitor values; the GPU
     /// canvas state is shared (`canvas::GPU_OUTPUT`).
     canvases: HashMap<(DocId, u32), canvas::CanvasCache>,

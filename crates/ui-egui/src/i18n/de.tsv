@@ -3532,3 +3532,98 @@ curves	Smooth	Glätten
 	Refine Hair needs hair detection, which isn't available yet	Haare verbessern benötigt eine Haarerkennung, die noch nicht verfügbar ist
 	Select and Mask was closed: its document is no longer the active one	Auswählen und maskieren wurde geschlossen: Das zugehörige Dokument ist nicht mehr aktiv
 	Select and Mask was closed: another layer was selected	Auswählen und maskieren wurde geschlossen: Es wurde eine andere Ebene ausgewählt
+	Email	E-Mail
+	Password	Passwort
+	Second factor	Zweiter Faktor
+	Six-digit authenticator code or ten-character recovery code	Sechsstelliger Authenticator-Code oder zehnstelliger Wiederherstellungscode
+	Sign in	Anmelden
+	Account	Konto
+	Organization	Organisation
+	Sign out	Abmelden
+	Browse	Durchsuchen
+	Shared with me	Für mich freigegeben
+	Project	Projekt
+	Load more	Weitere laden
+	File name	Dateiname
+	New version	Neue Version
+	Keep both	Beide behalten
+	Overwrite	Überschreiben
+	Confirm overwrite	Überschreiben bestätigen
+	Open read-only	Schreibgeschützt öffnen
+	Being edited by	In Bearbeitung von
+	Progress	Fortschritt
+	Retry upload	Erneut hochladen
+	Offline. Saved locally; Cloud upload pending.	Offline. Lokal gespeichert; Cloud-Upload ausstehend.
+	Connect	Verbinden
+	Trust this server and continue	Diesem Server vertrauen und fortfahren
+	This CraftCloud file is open read-only. Use Save As to create an editable copy.	Diese CraftCloud-Datei ist schreibgeschützt geöffnet. Verwende „Speichern unter“, um eine bearbeitbare Kopie zu erstellen.
+	Choose a CraftCloud project first.	Wähle zuerst ein CraftCloud-Projekt aus.
+	Open a document before saving to CraftCloud.	Öffne ein Dokument, bevor du es in CraftCloud speicherst.
+	Save this document locally before creating its first CraftCloud version.	Speichere dieses Dokument lokal, bevor du seine erste CraftCloud-Version erstellst.
+	Save this document locally before creating a CraftCloud version.	Speichere dieses Dokument lokal, bevor du eine CraftCloud-Version erstellst.
+	This local file is already linked to a different CraftCloud file.	Diese lokale Datei ist bereits mit einer anderen CraftCloud-Datei verknüpft.
+	Connection ended after the request may have completed. Check the file before retrying.	Die Verbindung endete, nachdem die Anfrage möglicherweise abgeschlossen wurde. Prüfe die Datei vor einem erneuten Versuch.
+	CraftCloud server is unreachable. Retry when connected.	Der CraftCloud-Server ist nicht erreichbar. Versuche es erneut, sobald eine Verbindung besteht.
+	This file changed on CraftCloud. Save as a new file or reload the latest version.	Diese Datei wurde in CraftCloud geändert. Speichere sie als neue Datei oder lade die neueste Version.
+	CraftCloud upload failed: {error}	CraftCloud-Upload fehlgeschlagen: {error}
+	Set up CraftCloud to open…	CraftCloud zum Öffnen einrichten…
+	Set up CraftCloud to save…	CraftCloud zum Speichern einrichten…
+	Open from CraftCloud…	Aus CraftCloud öffnen…
+	Save to CraftCloud…	In CraftCloud speichern…
+	Save as PSD in CraftCloud…	Als PSD in CraftCloud speichern…
+	CraftCloud save is locked	CraftCloud-Speichern ist gesperrt
+	Another editor holds the file lock. Your local save is safe.	Ein anderer Editor hält die Dateisperre. Deine lokale Datei ist sicher gespeichert.
+	Save as a copy	Als Kopie speichern
+	Wait for the current CraftCloud request to finish before changing servers.	Warte, bis die laufende CraftCloud-Anfrage abgeschlossen ist, bevor du den Server wechselst.
+	Sign in to the CraftCloud server linked to this document before uploading.	Melde dich am CraftCloud-Server an, mit dem dieses Dokument verknüpft ist, bevor du es hochlädst.
+	Sign in to the CraftCloud server selected for this save.	Melde dich am für diesen Speichervorgang ausgewählten CraftCloud-Server an.
+	The first CraftCloud save is still pending.	Der erste CraftCloud-Speichervorgang ist noch nicht abgeschlossen.
+	CraftCloud link is unavailable.	Die CraftCloud-Verknüpfung ist nicht verfügbar.
+	This document is linked to a different CraftCloud file.	Dieses Dokument ist mit einer anderen CraftCloud-Datei verknüpft.
+	A CraftCloud operation is already running.	Ein CraftCloud-Vorgang läuft bereits.
+	Cloud working path is not valid Unicode.	Der lokale Cloud-Arbeitspfad ist kein gültiger Unicode-Text.
+	CraftCloud links are unavailable.	Die CraftCloud-Dateiverknüpfungen sind nicht verfügbar.
+	File is being edited by	Die Datei wird bearbeitet von
+	No trusted CraftCloud server is selected.	Es ist kein vertrauenswürdiger CraftCloud-Server ausgewählt.
+	PhotoCraft data directory is unavailable.	Der PhotoCraft-Datenordner ist nicht verfügbar.
+	Server	Server
+	Sign in to CraftCloud before saving.	Melde dich vor dem Speichern bei CraftCloud an.
+	Sign in to CraftCloud before uploading this save.	Melde dich vor dem Hochladen dieses Speicherstands bei CraftCloud an.
+	Sign in to the selected CraftCloud server before saving.	Melde dich vor dem Speichern beim ausgewählten CraftCloud-Server an.
+	The previous CraftCloud lease is still releasing.	Die vorherige CraftCloud-Bearbeitungssperre wird noch freigegeben.
+	another editor	einer anderen Person
+	Set up CraftCloud to save as PSD…	CraftCloud zum Speichern als PSD einrichten…
+	Existing CraftCloud files	Vorhandene CraftCloud-Dateien
+	Select a file to save a new version.	Wählen Sie eine Datei, um eine neue Version zu speichern.
+	This local file does not match the selected CraftCloud format. Save a local copy in that format first.	Diese lokale Datei entspricht nicht dem ausgewählten CraftCloud-Format. Speichern Sie zuerst eine lokale Kopie in diesem Format.
+	Choose a PSD CraftCloud file for this save.	Wählen Sie zum Speichern eine PSD-Datei in CraftCloud.
+	This CraftCloud document is open read-only. Save a new editable copy first.	Dieses CraftCloud-Dokument ist schreibgeschützt geöffnet. Speichern Sie zuerst eine neue bearbeitbare Kopie.
+	CraftCloud local save failed: {error}	Lokales Speichern für CraftCloud fehlgeschlagen: {error}
+	Back	Zurück
+	Loading…	Wird geladen…
+	Choose an organization	Organisation wählen
+	Choose a workspace	Arbeitsbereich wählen
+	Choose a project	Projekt wählen
+	No organizations available.	Keine Organisationen verfügbar.
+	This organization has no workspaces.	Diese Organisation hat keine Arbeitsbereiche.
+	This project has no files yet.	Dieses Projekt enthält noch keine Dateien.
+	This workspace has no projects yet. Create one to save into it.	Dieser Arbeitsbereich hat noch keine Projekte. Lege ein Projekt an, um darin zu speichern.
+	New project	Neues Projekt
+	Project name	Projektname
+	Create project	Projekt anlegen
+	You are not allowed to create projects here.	Du darfst hier keine Projekte anlegen.
+	A project with this name already exists.	Ein Projekt mit diesem Namen existiert bereits.
+	Save to	Speichern in
+	Choose a project to save into first.	Wähle zuerst ein Projekt als Speicherort.
+	Will connect to	Verbindung zu
+	No scheme entered: http:// is used for this local address.	Kein Schema angegeben: für diese lokale Adresse wird http:// verwendet.
+	No scheme entered: https:// is used.	Kein Schema angegeben: https:// wird verwendet.
+	The server does not speak HTTPS at this address. Check the address and port, or use http:// for a local test server.	Der Server spricht an dieser Adresse kein HTTPS. Prüfe Adresse und Port oder verwende für einen lokalen Testserver http://.
+	Save As	Speichern unter
+	Save to CraftCloud	In CraftCloud speichern
+	Access from any device, share with your team	Von jedem Gerät aus zugreifen und im Team teilen
+	Save on this computer	Auf diesem Computer speichern
+	Save a file on your computer	Eine Datei auf deinem Computer speichern
+	Ask where to save	Speicherort abfragen
+	PhotoCraft (.pcraft)	PhotoCraft (.pcraft)
+	Photoshop (.psd)	Photoshop (.psd)
