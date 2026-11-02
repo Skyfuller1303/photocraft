@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+craftcloud = ["dep:craftcloud-client", "dep:craftcloud-client-native", "dep:craftcloud-egui", "dep:url", "dep:uuid"]
+
 [lints]
 workspace = true
 
@@ -49,6 +52,11 @@ craft-update = { workspace = true }
 rayon = { workspace = true }
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.
 sys-locale = "=0.3.2"
+craftcloud-client = { path = "../../../CraftCloud/sdk-pin/crates/craftcloud-client", optional = true }
+craftcloud-client-native = { path = "../../../CraftCloud/sdk-pin/crates/craftcloud-client-native", optional = true }
+craftcloud-egui = { path = "../../../CraftCloud/sdk-pin/crates/craftcloud-egui", optional = true }
+url = { version = "2", optional = true }
+uuid = { version = "1", features = ["v4"], optional = true }
 
 # Installed RAM for the GPU memory budget (`gpu_canvas::physical_memory`) and the user's decimal
 # symbol (`i18n::decimal_separator`, a registry read): the safe binding the desktop app already

@@ -99,10 +99,20 @@ impl PhotocraftApp {
         }
         if self.background_jobs {
             // The path and Open Recent are recorded when the background open finishes.
-            crate::jobs_ui::start_open(self, &display_name(path), Some(path.to_string()), crate::jobs_ui::bytes(bytes))?;
+            let result = crate::jobs_ui::start_open(self, &display_name(path), Some(path.to_string()), crate::jobs_ui::bytes(bytes));
+            if let Err(error) = result {
+                #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+                self.cloud.cancel_open_file(path);
+                return Err(error);
+            }
             return Ok(Vec::new());
         }
-        self.open_bytes_from(&display_name(path), bytes, Some(path))
+        let result = self.open_bytes_from(&display_name(path), bytes, Some(path));
+        if result.is_err() {
+            #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+            self.cloud.cancel_open_file(path);
+        }
+        result
     }
 
     /// Record that the active document was just opened from `path`: File › Save writes back to it
@@ -132,16 +142,31 @@ impl PhotocraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_path(&mut self, path: &str) -> Result<Vec<String>, String> {
         if self.show_if_open(path) {
+            #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+            self.cloud.cancel_open_file(path);
             return Ok(Vec::new());
         }
         // Documents opening in the background are read on the worker too (a 2 GB PSB read
         // would block the window). Preset files (brushes, gradients) go the usual way.
         let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
         if self.background_jobs && !crate::preset_files_ui::PRESET_EXTS.contains(&ext.as_str()) {
-            crate::jobs_ui::start_open(self, &display_name(path), Some(path.to_string()), photocraft_engine::jobs::OpenSource::Path(path.to_string()))?;
+            if let Err(error) =
+                crate::jobs_ui::start_open(self, &display_name(path), Some(path.to_string()), photocraft_engine::jobs::OpenSource::Path(path.to_string()))
+            {
+                #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+                self.cloud.cancel_open_file(path);
+                return Err(error);
+            }
             return Ok(Vec::new());
         }
-        let bytes = photocraft_format::read_file(std::path::Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
+        let bytes = match photocraft_format::read_file(std::path::Path::new(path)) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+                self.cloud.cancel_open_file(path);
+                return Err(format!("{path}: {error}"));
+            }
+        };
         self.open_file(path, &bytes)
     }
 
@@ -158,13 +183,32 @@ impl PhotocraftApp {
         // The command line's files open before the first frame, which otherwise applies the
         // interface language: their status lines and notices would come out in English.
         crate::i18n::set_current(crate::i18n::Lang::from_pref(&self.session.prefs().interface.language));
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        let (cloud_links, local_paths): (Vec<_>, Vec<_>) =
+            paths.iter().cloned().partition(|p| p.split_once("://").is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("craftcloud")));
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        let mut opened = cloud_links.len();
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        for link in cloud_links {
+            if let Err(error) = self.open_cloud_link(&link) {
+                self.open_failed("CraftCloud", &error);
+                opened = opened.saturating_sub(1);
+            }
+        }
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        let paths = local_paths;
+        #[cfg(any(not(feature = "craftcloud"), target_arch = "wasm32"))]
+        let paths = paths.to_vec();
         let mut paths: Vec<String> = paths.iter().map(|p| absolute(p)).collect();
         paths.sort_by(|a, b| natural_cmp(a, b));
         let batch = crate::jobs_ui::begin_batch(self);
+        #[cfg(any(not(feature = "craftcloud"), target_arch = "wasm32"))]
         let mut opened = 0;
         for (seq, abs) in paths.iter().enumerate() {
             // Not a member of the set: its tab is already in place.
             if self.show_if_open(abs) {
+                #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+                self.cloud.cancel_open_file(abs);
                 continue;
             }
             let order = crate::jobs_ui::OpenOrder { batch, seq };
@@ -184,6 +228,17 @@ impl PhotocraftApp {
         }
         crate::jobs_ui::end_batch(&mut self.jobs);
         opened
+    }
+
+    /// Open a CraftCloud launch link. Unknown servers stop at the SDK's explicit trust dialog.
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    pub fn open_cloud_link(&mut self, link: &str) -> Result<(), String> {
+        if let Some(path) = self.cloud.open_path_for_link(link)?
+            && self.show_if_open(&path)
+        {
+            return Ok(());
+        }
+        self.cloud.open_link(link)
     }
 
     /// Show the document already open from the file at `path`, or its tab while it is still

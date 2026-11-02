@@ -213,6 +213,7 @@ fn attach_log_file(logger: Option<&'static logging::AppLogger>) {
 #[cfg(not(target_os = "macos"))]
 fn claim_single_instance(
     files: &[String],
+    cloud_links: &[String],
     new_instance: bool,
     control: bool,
     unreadable_paths: bool,
@@ -239,7 +240,7 @@ fn claim_single_instance(
         }
         (None, None) => Continue(None),
         (None, Some(dir)) => {
-            let paths: Vec<String> = files.iter().map(|f| single_instance::absolute(f)).collect();
+            let paths: Vec<String> = files.iter().map(|f| single_instance::absolute(f)).chain(cloud_links.iter().cloned()).collect();
             match single_instance::claim(&dir, &paths) {
                 single_instance::Launch::Forwarded => {
                     log::info!("handed {} file(s) to the running PhotoCraft", paths.len());
@@ -362,6 +363,7 @@ fn main() -> eframe::Result {
     let launch_args::FileNames { openable: files, unreadable: unreadable_paths } = launch.file_names();
     let launch_args::LaunchArgs {
         files: _,
+        cloud_links,
         safe_gpu,
         in_window_menus,
         new_instance,
@@ -385,7 +387,16 @@ fn main() -> eframe::Result {
     // become tabs in its window. Lives until the event loop returns, then `shutdown` lets the next
     // launch become the primary.
     #[cfg(not(target_os = "macos"))]
-    let single_instance = match claim_single_instance(&files, new_instance, control_port.is_some(), !unreadable_paths.is_empty(), launch_options) {
+    let keep_cloud_links_local = !cfg!(feature = "craftcloud") && !cloud_links.is_empty();
+    #[cfg(not(target_os = "macos"))]
+    let single_instance = match claim_single_instance(
+        &files,
+        &cloud_links,
+        new_instance || keep_cloud_links_local,
+        control_port.is_some(),
+        !unreadable_paths.is_empty(),
+        launch_options,
+    ) {
         std::ops::ControlFlow::Break(()) => return Ok(()),
         std::ops::ControlFlow::Continue(primary) => primary,
     };
@@ -671,6 +682,23 @@ fn main() -> eframe::Result {
             app.services.right_button_down = tablet::right_button_service();
             // Paths on the command line (Linux/Windows file associations, `photocraft a.psd`).
             app.open_paths(&files);
+            #[cfg(feature = "craftcloud")]
+            {
+                let errors: Vec<String> = cloud_links.iter().filter_map(|link| app.open_cloud_link(link).err()).collect();
+                if !errors.is_empty() {
+                    photocraft_ui_egui::notices::post(&mut app, "Could not open from CraftCloud", errors, true, None);
+                }
+            }
+            #[cfg(not(feature = "craftcloud"))]
+            if !cloud_links.is_empty() {
+                photocraft_ui_egui::notices::post(
+                    &mut app,
+                    "CraftCloud is unavailable",
+                    vec!["This PhotoCraft build does not include CraftCloud support.".into()],
+                    false,
+                    None,
+                );
+            }
             if !unreadable_paths.is_empty() {
                 use photocraft_ui_egui::i18n;
                 let line = i18n::t("{path}: the path is not valid Unicode; rename the file and open it again.");

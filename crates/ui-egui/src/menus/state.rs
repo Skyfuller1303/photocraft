@@ -3,6 +3,10 @@ use super::items::MenuItem;
 use super::{DOCUMENT_ITEM, PhotocraftApp, Value};
 
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    if crate::cloud::handles(id) {
+        return crate::cloud::is_enabled(app, id);
+    }
     if id == "layer.selectUnderCursor" {
         return app.session.active().is_some() && app.drag.is_none() && app.brush_resize.is_none();
     }

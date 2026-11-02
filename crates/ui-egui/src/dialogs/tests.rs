@@ -1,5 +1,79 @@
 use super::*;
 
+#[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+struct EmptyCloudTransport;
+
+#[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+impl craftcloud_client::CloudTransport for EmptyCloudTransport {
+    fn send(&self, _request: craftcloud_client::Request) -> Result<craftcloud_client::Response, craftcloud_client::CloudError> {
+        Ok(craftcloud_client::Response { status: 200, headers: Vec::new(), body: Vec::new() })
+    }
+}
+
+#[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+#[test]
+fn cloud_open_waiting_for_profile_choice_never_binds_the_previous_active_document() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    let root = tempfile::tempdir().expect("temporary Cloud data directory");
+    let path = root.path().join("cloud-open.pcraft");
+    let path_text = path.to_str().expect("UTF-8 test path").to_string();
+    let server = "http://127.0.0.1:18095";
+    std::fs::write(&path, b"test file").expect("local Cloud working file");
+    let services = crate::Services {
+        import: Some(Box::new(|name, _bytes, _options| {
+            let mut doc =
+                photocraft_doc::Document::new(name, photocraft_doc::Size::new(16, 16), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+            doc.icc_profile = Some(photocraft_cms::Builtin::AdobeRgbCompat.profile().to_bytes());
+            Ok((doc, Vec::new()))
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.cloud = crate::cloud::Runtime::with_test_transport(Some(root.path()), server, Arc::new(EmptyCloudTransport)).expect("test Cloud runtime");
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.run("edit.colorSettings", json!({"askOnMismatch": true, "askOnMissing": false, "policyRgb": "preserve"})).unwrap();
+    let local_doc = app.session.active().expect("local tab A").doc.id;
+    let lease_releases = Arc::new(AtomicUsize::new(0));
+
+    let queue_cloud_admission = |app: &mut PhotocraftApp| {
+        app.cloud.queue_test_admission_with_lease(
+            &path_text,
+            craftcloud_client_native::CloudLink {
+                local_path: path.clone(),
+                server: server.into(),
+                file_id: uuid::Uuid::new_v4().to_string(),
+                base_version: Some(uuid::Uuid::new_v4().to_string()),
+                sha256: String::new(),
+            },
+            Arc::clone(&lease_releases),
+        );
+    };
+    queue_cloud_admission(&mut app);
+    let requests = app.cloud.take_local_open_requests();
+    assert_eq!(app.open_paths(&requests), 1, "Cloud working path starts opening");
+    assert_eq!(app.held_opens.len(), 1, "the embedded profile prompt holds the Cloud document");
+    assert!(app.cloud.has_pending_admission(&path_text));
+    assert!(!app.cloud.wants_local_save(local_doc, &path_text), "the prompt must not bind the old active tab");
+    assert_eq!(app.session.active().map(|st| st.doc.id), Some(local_doc));
+    crate::open_prompt::answer(&mut app, None).unwrap();
+    assert!(!app.cloud.has_pending_admission(&path_text), "cancelling the profile prompt releases the pending admission");
+    assert_eq!(lease_releases.load(Ordering::SeqCst), 1, "cancelling drops the pending file lease");
+    assert!(!app.cloud.wants_local_save(local_doc, &path_text));
+
+    queue_cloud_admission(&mut app);
+    let requests = app.cloud.take_local_open_requests();
+    assert_eq!(app.open_paths(&requests), 1, "Cloud working path can be opened again after cancellation");
+    let cloud_doc = app.held_opens.front().expect("profile decision pending").doc.id;
+    crate::open_prompt::answer(&mut app, Some("preserve")).unwrap();
+    assert!(!app.cloud.has_pending_admission(&path_text), "accepted document consumes the pending admission");
+    assert!(app.cloud.wants_local_save(cloud_doc, &path_text), "the admitted document is bound to its Cloud path");
+    assert!(!app.cloud.wants_local_save(local_doc, &path_text), "the prior tab remains unbound");
+}
+
 /// A filter dialog over a 256×256 layer, with the preview the canvas computed for it on screen.
 fn filter_dialog_with_preview(background: bool) -> (PhotocraftApp, u64) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

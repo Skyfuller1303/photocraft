@@ -20,6 +20,89 @@ impl PhotocraftApp {
     }
 }
 
+#[cfg(all(test, feature = "craftcloud", not(target_arch = "wasm32")))]
+mod cloud_input_tests {
+    use super::*;
+    use egui::{Event, Key, Modifiers, accesskit::Role};
+    use egui_kittest::{Harness, kittest::Queryable};
+    use serde_json::json;
+
+    #[test]
+    fn opening_cloud_setup_blocks_canvas_clickthrough_and_escape_cancels() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.ui.tool = crate::state::Tool::Brush;
+        let mut harness = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ALL[0]);
+            app
+        });
+        harness.run_steps(5);
+        let before = {
+            let doc = harness.state().session.active().unwrap();
+            (doc.revision, doc.history.past_len())
+        };
+
+        harness.get_by_label("File").click();
+        harness.run_steps(2);
+        harness.get_by_label("Set up CraftCloud to open…").click();
+        harness.run_steps(3);
+
+        assert!(harness.state().cloud.blocks_input());
+        let after_open = {
+            let doc = harness.state().session.active().unwrap();
+            (doc.revision, doc.history.past_len())
+        };
+        assert_eq!(after_open, before, "opening setup must not paint through onto the canvas");
+
+        let server_label = harness
+            .query_all_by_role(Role::Label)
+            .find(|node| node.value().as_deref() == Some("Server"))
+            .map(|node| node.rect())
+            .expect("SDK Server label is present");
+        let field = egui::pos2(server_label.center().x, server_label.bottom() + 10.0);
+        harness.event(Event::PointerMoved(field));
+        harness.run_steps(1);
+        for pressed in [true, false] {
+            harness.event(Event::PointerButton { pos: field, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            harness.run_steps(1);
+        }
+        harness.event(Event::Text("https://cloud.example".into()));
+        harness.run_steps(2);
+        assert_eq!(harness.state().cloud.test_server_url(), "https://cloud.example", "SDK server field accepts text");
+        let trust = harness.get_by_label("Trust this server and continue").rect().center();
+        harness.event(Event::PointerMoved(trust));
+        harness.run_steps(1);
+        for pressed in [true, false] {
+            harness.event(Event::PointerButton { pos: trust, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            harness.run_steps(1);
+        }
+        harness.run_steps(2);
+        let after_dialog = {
+            let doc = harness.state().session.active().unwrap();
+            (doc.revision, doc.history.past_len())
+        };
+        assert_eq!(after_dialog, before, "typing and clicking in CraftCloud must not edit the document");
+
+        harness.event(Event::Key { key: Key::V, physical_key: Some(Key::V), pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        harness.run_steps(2);
+        harness.event(Event::Key { key: Key::V, physical_key: Some(Key::V), pressed: false, repeat: false, modifiers: Modifiers::NONE });
+        harness.run_steps(2);
+        assert_eq!(harness.state().ui.tool, crate::state::Tool::Brush, "Cloud dialog must suppress app tool shortcuts");
+
+        harness.event(Event::Key { key: Key::Escape, physical_key: Some(Key::Escape), pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        harness.run_steps(2);
+        harness.event(Event::Key { key: Key::Escape, physical_key: Some(Key::Escape), pressed: false, repeat: false, modifiers: Modifiers::NONE });
+        harness.run_steps(2);
+        assert!(!harness.state().cloud.blocks_input(), "Escape must dismiss the SDK server dialog");
+        assert_eq!(
+            (harness.state().session.active().unwrap().revision, harness.state().session.active().unwrap().history.past_len()),
+            before,
+            "dialog interaction must leave the document untouched"
+        );
+    }
+}
+
 impl PhotocraftApp {
     /// Shared logic body. A wrapping host owns the final reset tail after its own work.
     pub fn logic_frame(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
@@ -85,9 +168,13 @@ impl PhotocraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             crate::dialogs::filter_preview_worker::discard_closed(self);
             if type_tool::in_ui_pass(ctx) {
-                if self.fonts_ready {
+                #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+                let cloud_blocks_input = self.cloud.blocks_input();
+                #[cfg(not(all(feature = "craftcloud", not(target_arch = "wasm32"))))]
+                let cloud_blocks_input = false;
+                if self.fonts_ready && !cloud_blocks_input {
                     shortcuts::handle(self, ctx);
-                } else {
+                } else if !self.fonts_ready {
                     type_tool::controls_only(self, ctx);
                 }
             }
@@ -231,6 +318,10 @@ impl PhotocraftApp {
     /// wait modal took the frame (its input, IME and window check already handled).
     fn ui_body(&mut self, ui: &mut egui::Ui) -> bool {
         let ctx = ui.ctx().clone();
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        if self.cloud.blocks_input() {
+            ui.disable();
+        }
         // A text field's right-click menu, before any field is drawn (text_field_menu.rs).
         text_field_menu::show(&ctx);
         // The wheel goes to a focused value field before the canvas or a panel sees it (#5473).
@@ -279,6 +370,12 @@ impl PhotocraftApp {
         if (chrome || tabbed_in) && self.ui.panels.menu_bar {
             panels::title_bar(self, ui);
         }
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        if self.cloud.blocks_input() {
+            // A menu item can open CraftCloud during title-bar rendering. Disable the remaining
+            // root UI in this pass so that same click cannot reach the canvas underneath.
+            ui.disable();
+        }
         if (chrome && self.ui.panels.options_bar) || tabbed_in {
             panels::options_bar(self, ui);
         }
@@ -309,6 +406,36 @@ impl PhotocraftApp {
         workspace_ui::windows(self, &ctx);
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        {
+            let language = self.session.prefs().interface.language.clone();
+            let mut cloud = std::mem::replace(&mut self.cloud, crate::cloud::Runtime::new(None));
+            let _ = cloud.show(self, &ctx, &language);
+            let live_documents = self.session.documents().iter().map(|document| document.doc.id).collect();
+            cloud.set_saving_paths(self.jobs.saves.iter().map(|save| std::path::PathBuf::from(&save.path)).collect());
+            cloud.sync_live_documents(&live_documents);
+            let deferred_save = cloud.take_deferred_local_save();
+            let local_open_requests = cloud.take_local_open_requests();
+            let local_save = cloud.take_local_save();
+            self.cloud = cloud;
+            if let Some(local) = local_save
+                && let Err(error) = self.with_document(local.doc, |app| app.save_dialog_flow_native(None, local.choices, local.plain_save))
+            {
+                crate::notices::error(self, error);
+            }
+            if !local_open_requests.is_empty() {
+                self.open_paths(&local_open_requests);
+            }
+            if let Some(deferred) = deferred_save {
+                let result = self.with_document(deferred.doc, |app| {
+                    if deferred.copy { app.run("file.saveACopy", serde_json::json!({"path": deferred.path})) } else { app.save_as(Some(deferred.path)) }
+                });
+                if let Err(error) = result {
+                    self.cloud.cancel_pending_new_file(deferred.doc);
+                    crate::notices::error(self, crate::i18n::fmt(tl!("CraftCloud local save failed: {error}"), &[("error", &error)]));
+                }
+            }
+        }
         layers_panel_ui::show_dialog(self, &ctx);
         rasterize_prompt::run_pending(self, &ctx);
         jobs_ui::dialog(self, &ctx);

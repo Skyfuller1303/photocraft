@@ -372,6 +372,9 @@ pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 pub struct Services {
     /// Explicit interactive SVG smart-object editing; unavailable in browser and automation.
     pub open_external_svg: Option<OpenExternalSvgFn>,
+    /// Native app-data directory for Cloud metadata and local Cloud caches.
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    pub cloud_data_dir: Option<std::path::PathBuf>,
     /// User-initiated desktop/browser pixel sampling.
     pub screen_pick: Option<screen_picker::Service>,
     /// Decode a file's bytes into a document (PSD, PNG, JPEG, …).

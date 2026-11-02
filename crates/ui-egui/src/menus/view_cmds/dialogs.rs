@@ -624,6 +624,12 @@ pub(crate) fn write_copy(app: &mut PhotocraftApp, doc: &photocraft_doc::Document
     let (bytes, warnings) = export(doc, path, &settings)?;
     let write = app.services.write.as_mut().ok_or("no writer configured")?;
     write(path, &bytes)?;
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    if app.cloud.has_pending_new_file(doc.id)
+        && let Err(error) = app.cloud.on_local_save(doc.id, path, bytes.clone())
+    {
+        crate::notices::error(app, error);
+    }
     app.detach_others_from_file(path, doc.id);
     let template = "Saved a copy as {path}";
     app.ui.status = crate::i18n::fmt(tl!(template), &[("path", path)]);

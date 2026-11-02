@@ -19,6 +19,11 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             crate::direction::horizontal_centered(ui, |ui| {
                 if t.pro {
                     crate::chrome_ui::status_bar_pro(app, ui);
+                    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+                    if let Some(workspace) = app.session.active().and_then(|document| app.cloud.workspace_label(document.doc.id)) {
+                        widgets::vline(ui, 16.0);
+                        label(ui, &format!("☁ {workspace}"));
+                    }
                     // Background job progress with Cancel, at the far end (#210).
                     ui.with_layout(crate::direction::trailing(), |ui| {
                         crate::jobs_ui::status_progress(app, ui);
@@ -46,6 +51,11 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     label(ui, &crate::i18n::trn(crate::i18n::current(), layers as u64, "{n} layer", "{n} layers"));
                 } else {
                     label(ui, tl!("No document"));
+                }
+                #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+                if let Some(workspace) = app.session.active().and_then(|document| app.cloud.workspace_label(document.doc.id)) {
+                    widgets::vline(ui, 16.0);
+                    label(ui, &format!("☁ {workspace}"));
                 }
                 if !app.ui.status.is_empty() {
                     widgets::vline(ui, 16.0);

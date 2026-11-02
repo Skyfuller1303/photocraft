@@ -19,9 +19,9 @@
 //!
 //! The canvas keeps showing the pre-job state: workers never touch the session's documents.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 
 use egui::{Color32, Rect, RichText, Sense, Stroke, vec2};
 use photocraft_doc::DocId;
@@ -82,9 +82,15 @@ const CANCELLED: u8 = 2;
 pub struct SaveState {
     stage: AtomicU8,
     finished: AtomicBool,
+    capture_snapshot: bool,
+    snapshot: Mutex<Option<Vec<u8>>>,
 }
 
 impl SaveState {
+    fn new(capture_snapshot: bool) -> Self {
+        Self { stage: AtomicU8::new(ENCODING), finished: AtomicBool::new(false), capture_snapshot, snapshot: Mutex::new(None) }
+    }
+
     /// Cancel unless writing has started; false once it has.
     fn try_cancel(&self) -> bool {
         matches!(self.stage.compare_exchange(ENCODING, CANCELLED, Ordering::AcqRel, Ordering::Acquire), Ok(_) | Err(CANCELLED))
@@ -93,6 +99,10 @@ impl SaveState {
     /// The worker has returned (or unwound): nothing of this save can still touch the file.
     pub fn finished(&self) -> bool {
         self.finished.load(Ordering::Acquire)
+    }
+
+    fn take_snapshot(&self) -> Option<Vec<u8>> {
+        self.snapshot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
     }
 }
 
@@ -130,6 +140,14 @@ impl SaveCtl {
         self.check()?;
         self.state.stage.compare_exchange(ENCODING, WRITING, Ordering::AcqRel, Ordering::Acquire).map(|_| ()).map_err(|_| SAVE_CANCELLED.into())
     }
+
+    /// Preserve the exact exported bytes after the local writer succeeds, only when this save
+    /// targets a linked Cloud document.
+    pub fn saved_bytes(&self, bytes: &[u8]) {
+        if self.state.capture_snapshot {
+            *self.state.snapshot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(bytes.to_vec());
+        }
+    }
 }
 
 /// The error a cancelled save worker returns.
@@ -143,6 +161,8 @@ pub struct SaveJob {
     /// The document's revision when the save started (the job locks it against edits).
     pub revision: u64,
     pub path: String,
+    /// Path bound to the document when the save started; Save As can detach a Cloud identity.
+    pub previous_path: Option<String>,
     /// A copy leaves the document's path and unsaved state alone.
     pub copy: bool,
     /// An automation save records without firing user-configured hooks.
@@ -278,11 +298,15 @@ pub fn start_save(
     if app.jobs.saves.iter().any(|s| s.path == path) {
         return Err(crate::i18n::fmt(tl!("A save to {name} is still running; try again when it finishes"), &[("name", &name)]));
     }
-    let (snapshot, doc, revision) = (Arc::clone(&st.doc), st.doc.id, st.revision);
+    let (snapshot, doc, revision, previous_path) = (Arc::clone(&st.doc), st.doc.id, st.revision, st.path.clone());
     let label = crate::i18n::fmt(tl!("Saving {name}"), &[("name", &name)]);
     let target = path.clone();
     let result_path = path.clone();
-    let state = Arc::new(SaveState::default());
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    let capture_snapshot = !automation && app.cloud.wants_local_save(doc, &path) && (!copy || app.cloud.has_pending_new_file(doc));
+    #[cfg(not(all(feature = "craftcloud", not(target_arch = "wasm32"))))]
+    let capture_snapshot = false;
+    let state = Arc::new(SaveState::new(capture_snapshot));
     let worker = Arc::clone(&state);
     let started = app.session.start_job(
         SAVE_JOB,
@@ -304,13 +328,14 @@ pub fn start_save(
                 app.saved_automation(doc, revision, &path, &warnings, copy);
             } else {
                 app.saved(doc, revision, &path, &warnings, copy);
+                app.after_local_save(doc, &path, previous_path.as_deref(), state.take_snapshot(), copy);
             }
             Ok(Some((path, warnings)))
         }
         Started::Job(job) => {
             // Preferences › File Handling › Save in Background, read when the save starts.
             let foreground = !app.session.prefs().file_handling.save_in_background;
-            app.jobs.saves.push(SaveJob { job, doc, revision, path, copy, automation, state, ended: false, foreground });
+            app.jobs.saves.push(SaveJob { job, doc, revision, path, previous_path, copy, automation, state, ended: false, foreground });
             // Control and MCP requests wait on it, as for other jobs.
             app.jobs.last_started = Some(job);
             // The status bar's progress readout names the save; clear any old message.
@@ -334,6 +359,7 @@ fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, labe
                 app.saved_automation(save.doc, save.revision, &save.path, &warnings_of(&v), save.copy);
             } else {
                 app.saved(save.doc, save.revision, &save.path, &warnings_of(&v), save.copy);
+                app.after_local_save(save.doc, &save.path, save.previous_path.as_deref(), save.state.take_snapshot(), save.copy);
             }
             if !save.copy {
                 crate::discard_ui::saved_document(app, ctx, save.doc);
@@ -427,6 +453,8 @@ pub fn job_in_view(app: &PhotocraftApp) -> Option<JobInfo> {
 /// Cancel job `id` (the status bar's ×, the dialog's Cancel, Esc, closing an opening tab).
 pub fn cancel(app: &mut PhotocraftApp, id: JobId) -> bool {
     let label = app.session.job(id).map(|j| j.label);
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    let open_path = app.jobs.opens.iter().find(|open| open.job == id).and_then(|open| open.path.clone());
     // A save that has started replacing the file runs to the end: cancelling it now would leave
     // the file written but the document marked unsaved.
     if let Some(save) = app.jobs.saves.iter().find(|s| s.job == id)
@@ -438,6 +466,10 @@ pub fn cancel(app: &mut PhotocraftApp, id: JobId) -> bool {
     }
     let cancelled = app.session.cancel_job(id);
     if cancelled {
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        if let Some(path) = open_path {
+            app.cloud.cancel_open_file(&path);
+        }
         // The event (and its status text) arrives with the next poll; say so now as well.
         if let Some(l) = label {
             app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &l)]);
@@ -498,11 +530,25 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
         match e.outcome {
             JobOutcome::Done(v) => {
                 if let Err(err) = finish_open_tab(app, &tab, &v) {
+                    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+                    if let Some(path) = tab.path.as_deref() {
+                        app.cloud.cancel_open_file(path);
+                    }
                     app.open_failed(&tab.name, &err);
                 }
             }
-            JobOutcome::Failed(err) => app.open_failed(&tab.name, &err),
+            JobOutcome::Failed(err) => {
+                #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+                if let Some(path) = tab.path.as_deref() {
+                    app.cloud.cancel_open_file(path);
+                }
+                app.open_failed(&tab.name, &err)
+            }
             JobOutcome::Cancelled => {
+                #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+                if let Some(path) = tab.path.as_deref() {
+                    app.cloud.cancel_open_file(path);
+                }
                 app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &tab.name)]);
                 app.ui.status_error = false;
             }
@@ -600,6 +646,13 @@ pub(crate) fn after_open(
 ) -> Result<(), String> {
     let index = app.session.documents().iter().position(|st| st.doc.id == document).ok_or("the opened document is missing")?;
     app.session.set_active(index);
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    if let Some(path) = path
+        && app.cloud.did_open_file(document, path)
+        && let Some(st) = app.session.active_mut()
+    {
+        st.source_read_only = true;
+    }
     if let Some(p) = path {
         app.opened_from(p);
     }

@@ -131,9 +131,19 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
     let Some(action) = action else {
         let dropped = app.held_opens.len();
         let name = app.held_opens.front().map(|h| h.name.clone()).unwrap_or_default();
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        let dropped_paths: Vec<String> = app.held_opens.iter().filter_map(|held| held.path.clone()).collect();
         app.held_opens.clear();
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        for path in dropped_paths {
+            app.cloud.cancel_open_file(&path);
+        }
         for job in app.jobs.opens.iter().map(|o| o.job).collect::<Vec<_>>() {
             app.session.cancel_job(job);
+        }
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        for path in app.jobs.opens.iter().filter_map(|o| o.path.as_deref()) {
+            app.cloud.cancel_open_file(path);
         }
         app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &name)]);
         app.ui.status_error = false;
@@ -224,7 +234,13 @@ pub(crate) fn answer_damage(app: &mut PhotocraftApp, accept: bool) -> Result<Val
     if accept {
         front.damage_pending = false;
     } else {
-        app.held_opens.pop_front();
+        let held = app.held_opens.pop_front();
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        if let Some(path) = held.as_ref().and_then(|held| held.path.as_deref()) {
+            app.cloud.cancel_open_file(path);
+        }
+        #[cfg(not(all(feature = "craftcloud", not(target_arch = "wasm32"))))]
+        let _ = held;
         app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &name)]);
         app.ui.status_error = false;
     }
@@ -243,6 +259,10 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         if let Some(action) = action
             && let Err(e) = app.session.color.resolve_open(&mut doc, action)
         {
+            #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+            if let Some(path) = path.as_deref() {
+                app.cloud.cancel_open_file(path);
+            }
             app.open_failed(&name, &e.to_string());
             return Err(e.to_string());
         }
@@ -264,6 +284,12 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         None => index,
     };
     app.session.set_active(index);
-    crate::jobs_ui::after_open(app, document, &name, path.as_deref(), &warnings, bytes.as_deref().map(Vec::as_slice))?;
+    if let Err(error) = crate::jobs_ui::after_open(app, document, &name, path.as_deref(), &warnings, bytes.as_deref().map(Vec::as_slice)) {
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        if let Some(path) = path.as_deref() {
+            app.cloud.cancel_open_file(path);
+        }
+        return Err(error);
+    }
     Ok(json!({"document": index, "action": action}))
 }

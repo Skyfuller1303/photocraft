@@ -25,6 +25,7 @@ pub fn is_live(id: &str) -> bool {
         || UI_IDS.get_or_init(|| UI_COMMANDS.iter().map(|c| c.0).collect()).contains(id)
         || panel_alias(id).is_some()
         || workspace_name(id).is_some()
+        || cloud_command(id)
         || proof_preset(id).is_some()
         || id == "view.proofSetup.custom"
         || crate::view_cmds::handles(id)
@@ -35,10 +36,25 @@ pub fn is_live(id: &str) -> bool {
         || crate::timeline_ui::handles(id)
 }
 
+fn cloud_command(id: &str) -> bool {
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    {
+        crate::cloud::handles(id)
+    }
+    #[cfg(any(not(feature = "craftcloud"), target_arch = "wasm32"))]
+    {
+        let _ = id;
+        false
+    }
+}
+
 /// Commands outside the catalogue that belong right after a catalogue item: `(id, after)`.
 /// The command takes that item's submenu path, so it joins Photoshop's submenu even where the
 /// catalogue spells it differently (Filter › "Other…").
 const PLACE_AFTER: &[(&str, &str)] = &[
+    ("file.craftcloud.open", "file.open"),
+    ("file.craftcloud.save", "file.saveAs"),
+    ("file.craftcloud.save_psd", "file.craftcloud.save"),
     ("file.newFromClipboard", "file.new"),
     ("filter.render.relight", "filter.render.lightingEffects"),
     ("view.resetView", "view.flipHorizontal"),
@@ -86,6 +102,8 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             color: None,
         });
     }
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    extra.extend(crate::cloud::menu_items(app));
     for mut e in extra {
         let dup = items.iter().any(|i| i.id == e.id || (i.path == e.path && i.label.trim_end_matches('…') == e.label.trim_end_matches('…')));
         if !dup {
