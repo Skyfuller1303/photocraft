@@ -1484,3 +1484,81 @@ fn import_variable_data_sets_menu_asks_for_a_csv_and_imports_it() {
     app.poll_file_dialog(&ctx, None);
     assert_eq!(app.session.active().map(|d| d.doc.variables.data_sets.len()), Some(2));
 }
+
+fn make() -> (PhotocraftApp, Open, Rc<RefCell<Vec<String>>>) {
+    app()
+}
+
+/// The label of the CraftCloud button on the dialog the app just asked for (`None`: no button).
+#[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+fn cloud_button(open: &Open) -> Option<String> {
+    open.borrow().last().and_then(|(_, reply)| reply.cloud_button().map(str::to_string))
+}
+
+#[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+#[test]
+fn only_file_open_and_save_as_offer_the_cloud_button_and_only_on_windows() {
+    let ctx = egui::Context::default();
+    // Windows' native dialogs are the only ones that can show it.
+    let (save, open_label) = if cfg!(windows) { (Some("Save to CraftCloud".to_string()), Some("Open from CraftCloud".to_string())) } else { (None, None) };
+
+    let (mut a, open, _) = make();
+    a.save_dialog_flow_native(None, crate::FormatChoices::default(), false).unwrap();
+    a.poll_file_dialog(&ctx, None);
+    assert_eq!(cloud_button(&open), save, "Save As");
+
+    let (mut a, open, _) = make();
+    a.open_dialog_file().unwrap();
+    a.poll_file_dialog(&ctx, None);
+    assert_eq!(cloud_button(&open), open_label, "File > Open");
+
+    // A command that reads one file (Place, scripts, presets) and the export dialogs have none.
+    let (mut a, open, _) = make();
+    a.pick_file_bytes(|_, _, _| Ok(Value::Null)).unwrap();
+    a.poll_file_dialog(&ctx, None);
+    assert_eq!(cloud_button(&open), None, "a command's Open");
+    let (mut a, open, _) = make();
+    a.pick_save("export.png", |_, _| Ok(Value::Null)).unwrap();
+    a.poll_file_dialog(&ctx, None);
+    assert_eq!(cloud_button(&open), None, "an export's Save");
+}
+
+#[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+#[test]
+fn the_cloud_button_of_save_as_opens_the_cloud_save_dialog() {
+    let ctx = egui::Context::default();
+    let (mut app, open, written) = app();
+    app.save_dialog_flow_native(None, crate::FormatChoices::default(), false).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::Cloud { file_name: Some("Poster".into()) }));
+    app.poll_file_dialog(&ctx, None);
+    assert!(!app.file_dialog_open(), "the native dialog is finished");
+    assert!(written.borrow().is_empty(), "nothing is saved on this computer");
+    assert_eq!(app.cloud.cloud_dialog_mode().map(|mode| format!("{mode:?}")).as_deref(), Some("Save"));
+}
+
+#[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+#[test]
+fn the_cloud_button_of_file_open_opens_the_cloud_open_dialog() {
+    let ctx = egui::Context::default();
+    let (mut app, open, _) = app();
+    app.open_dialog_file().unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::Cloud { file_name: None }));
+    app.poll_file_dialog(&ctx, None);
+    assert!(!app.file_dialog_open());
+    assert_eq!(app.cloud.cloud_dialog_mode().map(|mode| format!("{mode:?}")).as_deref(), Some("Open"));
+}
+
+#[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+#[test]
+fn a_cloud_answer_to_a_dialog_without_the_button_opens_nothing() {
+    let ctx = egui::Context::default();
+    let (mut app, open, _) = app();
+    app.pick_file_bytes(|_, _, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::Cloud { file_name: Some("x".into()) }));
+    app.poll_file_dialog(&ctx, None);
+    assert!(!app.file_dialog_open());
+    assert_eq!(app.cloud.cloud_dialog_mode(), None);
+}

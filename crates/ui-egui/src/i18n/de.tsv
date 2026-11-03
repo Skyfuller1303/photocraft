@@ -3640,3 +3640,26 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Ask where to save	Speicherort abfragen
 	PhotoCraft (.pcraft)	PhotoCraft (.pcraft)
 	Photoshop (.psd)	Photoshop (.psd)
+# Native Open dialog button (Windows)
+	Open from CraftCloud	Aus CraftCloud öffnen
+# CraftCloud dialogs and Preferences page
+	Save as	Speichern unter
+	This computer	Dieser Computer
+	Refresh	Aktualisieren
+	No CraftCloud server is set up.	Es ist noch kein CraftCloud-Server eingerichtet.
+	Open CraftCloud settings…	CraftCloud-Einstellungen öffnen…
+	Sign in to {server}	Bei {server} anmelden
+	This workspace has no projects yet.	Dieser Arbeitsbereich hat noch keine Projekte.
+	Nothing has been shared with you.	Für dich wurde noch nichts freigegeben.
+	Saves a new version of {name}	Speichert eine neue Version von {name}
+	Servers	Server
+	Server address	Serveradresse
+	Add server	Server hinzufügen
+	Adding a server trusts it. Only add servers you know.	Das Hinzufügen eines Servers vertraut ihm. Füge nur Server hinzu, die du kennst.
+	Add a server to sign in.	Füge einen Server hinzu, um dich anzumelden.
+	Signed in as {email}	Angemeldet als {email}
+	Not signed in	Nicht angemeldet
+	Saving	Speichern
+	Enter a server address.	Gib eine Serveradresse ein.
+	CraftCloud	CraftCloud
+	Answer the open CraftCloud prompt first, then choose CraftCloud again.	Beantworte zuerst die offene CraftCloud-Abfrage und wähle dann erneut CraftCloud.

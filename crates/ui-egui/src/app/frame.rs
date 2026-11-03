@@ -33,6 +33,7 @@ mod cloud_input_tests {
         app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
         app.run("layer.new.layer", json!({})).unwrap();
         app.ui.tool = crate::state::Tool::Brush;
+        app.cloud.config.trust("https://cloud.example".into()).unwrap();
         let mut harness = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ALL[0]);
             app
@@ -45,7 +46,7 @@ mod cloud_input_tests {
 
         harness.get_by_label("File").click();
         harness.run_steps(2);
-        harness.get_by_label("Set up CraftCloud to open…").click();
+        harness.get_by_label("Open from CraftCloud…").click();
         harness.run_steps(3);
 
         assert!(harness.state().cloud.blocks_input());
@@ -55,28 +56,21 @@ mod cloud_input_tests {
         };
         assert_eq!(after_open, before, "opening setup must not paint through onto the canvas");
 
-        let server_label = harness
+        let email_label = harness
             .query_all_by_role(Role::Label)
-            .find(|node| node.value().as_deref() == Some("Server"))
+            .find(|node| node.value().as_deref() == Some("Email"))
             .map(|node| node.rect())
-            .expect("SDK Server label is present");
-        let field = egui::pos2(server_label.center().x, server_label.bottom() + 10.0);
+            .expect("the sign-in panel's Email label is present");
+        let field = egui::pos2(email_label.left() + 40.0, email_label.bottom() + 14.0);
         harness.event(Event::PointerMoved(field));
         harness.run_steps(1);
         for pressed in [true, false] {
             harness.event(Event::PointerButton { pos: field, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
             harness.run_steps(1);
         }
-        harness.event(Event::Text("https://cloud.example".into()));
+        harness.event(Event::Text("me@example.com".into()));
         harness.run_steps(2);
-        assert_eq!(harness.state().cloud.test_server_url(), "https://cloud.example", "SDK server field accepts text");
-        let trust = harness.get_by_label("Trust this server and continue").rect().center();
-        harness.event(Event::PointerMoved(trust));
-        harness.run_steps(1);
-        for pressed in [true, false] {
-            harness.event(Event::PointerButton { pos: trust, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
-            harness.run_steps(1);
-        }
+        assert_eq!(harness.state().cloud.test_email(), "me@example.com", "the sign-in field accepts text");
         harness.run_steps(2);
         let after_dialog = {
             let doc = harness.state().session.active().unwrap();
@@ -94,7 +88,7 @@ mod cloud_input_tests {
         harness.run_steps(2);
         harness.event(Event::Key { key: Key::Escape, physical_key: Some(Key::Escape), pressed: false, repeat: false, modifiers: Modifiers::NONE });
         harness.run_steps(2);
-        assert!(!harness.state().cloud.blocks_input(), "Escape must dismiss the SDK server dialog");
+        assert!(!harness.state().cloud.blocks_input(), "Escape must dismiss the CraftCloud dialog");
         assert_eq!(
             (harness.state().session.active().unwrap().revision, harness.state().session.active().unwrap().history.past_len()),
             before,
@@ -417,7 +411,11 @@ impl PhotocraftApp {
             let deferred_save = cloud.take_deferred_local_save();
             let local_open_requests = cloud.take_local_open_requests();
             let local_save = cloud.take_local_save();
+            let local_open = cloud.take_local_open();
             self.cloud = cloud;
+            if local_open && let Err(error) = self.open_dialog_file() {
+                crate::notices::error(self, error);
+            }
             if let Some(local) = local_save
                 && let Err(error) = self.with_document(local.doc, |app| app.save_dialog_flow_native(None, local.choices, local.plain_save))
             {

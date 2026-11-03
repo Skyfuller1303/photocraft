@@ -181,6 +181,8 @@ impl PhotocraftApp {
             if path.is_none()
                 && let Some(doc) = self.session.active().map(|st| st.doc.id)
                 && self.cloud.asks_where_to_save()
+                // Windows' Save As dialog has its own "Save to CraftCloud" button instead.
+                && !cfg!(windows)
             {
                 self.cloud.open_save_chooser(crate::cloud::save_chooser::Chooser::new(doc, choices, plain_save));
                 return Ok(serde_json::json!({"path": null, "warnings": [], "chooser": true}));
@@ -222,7 +224,7 @@ impl PhotocraftApp {
             }
         };
         let doc = st.doc.id;
-        self.pick_save(&suggested, move |app, path| {
+        let asked = self.pick_save(&suggested, move |app, path| {
             app.with_document(doc, |app| {
                 let own = app.session.active().and_then(|st| st.path.clone());
                 // Confirming the document's own file: ask first if another app changed it (#6596).
@@ -238,7 +240,13 @@ impl PhotocraftApp {
                 }
                 Ok(r)
             })
-        })
+        });
+        // The dialog's CraftCloud button (Windows) continues this Save As in CraftCloud.
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        if asked.is_ok() {
+            self.offer_cloud_button(crate::file_dialog::CloudTarget::Save { doc, choices, plain_save });
+        }
+        asked
     }
 
     /// [`Self::save_as_with`] once the path is known.

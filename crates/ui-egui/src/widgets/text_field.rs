@@ -57,15 +57,21 @@ pub fn text_field(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, widt
 /// [`text_field`] limited to `char_limit` characters (a hex field's six digits, say), or to
 /// [`TEXT_FIELD_LIMIT`] without one.
 pub fn text_field_ex(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, width: f32, mono: bool, char_limit: Option<usize>) -> Response {
-    text_field_in(ui, id, text, hint, [width, 0.0], mono, char_limit).0
+    text_field_in(ui, id, text, hint, [width, 0.0], mono, char_limit, false).0
+}
+
+/// A [`text_field`] that hides what is typed (a password or a second-factor code).
+pub fn password_field(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, width: f32) -> Response {
+    text_field_in(ui, id, text, hint, [width, 0.0], false, None, true).0
 }
 
 /// A plain text field reserving space at its right for an embedded popup arrow.
 /// Returns the editor and the full field rectangle; the arrow gets its own interaction id.
 pub fn text_field_with_trailing(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, width: f32, trailing: f32) -> (Response, Rect) {
-    text_field_in(ui, id, text, hint, [width, trailing], false, None)
+    text_field_in(ui, id, text, hint, [width, trailing], false, None, false)
 }
 
+#[allow(clippy::too_many_arguments)] // The one shared implementation of every text field variant.
 fn text_field_in(
     ui: &mut Ui,
     id: egui::Id,
@@ -74,6 +80,7 @@ fn text_field_in(
     [width, trailing]: [f32; 2],
     mono: bool,
     char_limit: Option<usize>,
+    password: bool,
 ) -> (Response, Rect) {
     let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(width.max(16.0), TEXT_FIELD_H), Sense::hover());
@@ -102,6 +109,7 @@ fn text_field_in(
         .font(font)
         .min_size(inner.size())
         .align(egui::Align2::LEFT_CENTER)
+        .password(password)
         .char_limit(limit);
     // A child Ui keeps the field's selection colour local: `Visuals::selection` also fills selected
     // list rows and slider trails, which must keep the theme's.

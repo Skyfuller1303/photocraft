@@ -29,7 +29,7 @@ const SVG_EXTS: &[&str] = &["svg", "svgz"];
 /// On Linux and the BSDs rfd turns each extension into a case-sensitive `*.ext` glob for the XDG
 /// portal or zenity, so every letter becomes a character class, as the portal spec suggests
 /// (`*.[iI][cC][oO]`). Windows and macOS take literal extensions and ignore case already.
-fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
+pub(crate) fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
     let case_sensitive_globs = cfg!(all(unix, not(target_os = "macos")));
     let class = |c: char| if c.is_ascii_alphabetic() { format!("[{}{}]", c.to_ascii_lowercase(), c.to_ascii_uppercase()) } else { c.to_string() };
     extensions.iter().map(|ext| if case_sensitive_globs { ext.chars().map(class).collect() } else { ext.to_string() }).collect()
@@ -76,7 +76,7 @@ const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("Keyboard Shortcuts", &["kys"]),
 ];
 
-fn open_filters() -> Vec<(&'static str, Vec<String>)> {
+pub(crate) fn open_filters() -> Vec<(&'static str, Vec<String>)> {
     std::iter::once(("All Formats", open_filter_extensions(OPEN_EXTS)))
         .chain(OPEN_FILTERS.iter().map(|(name, exts)| (*name, open_filter_extensions(exts))))
         .collect()
@@ -120,14 +120,14 @@ const OTHER_SAVE_FILTERS: &[(&str, &[&str])] = &[("Color Swatches", &["aco"]), (
 /// `suggested` with a Netpbm subtype's extension (an opened .pgm) as the neutral .pnm, the name
 /// every save dialog starts from: the encoder picks P5, P6, P7 or PFM from the image, so the old
 /// suffix could name other data, and macOS and rfd keep the suggested name as it is.
-fn netpbm_as_pnm(suggested: &str) -> String {
+pub(crate) fn netpbm_as_pnm(suggested: &str) -> String {
     let path = Path::new(suggested);
     let subtype = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).is_some_and(|e| ["pbm", "pgm", "ppm", "pam", "pfm"].contains(&e.as_str()));
     if subtype { path.with_extension("pnm").to_string_lossy().into_owned() } else { suggested.to_string() }
 }
 
 /// Lists the save dialog's file types with the `suggested` type first (added if unlisted), so the dialog keeps that extension instead of .psd.
-fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
+pub(crate) fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
     let ext = Path::new(suggested).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     // A Netpbm subtype's name (an opened .pgm) starts on the Netpbm type as .pnm: the encoder picks
     // the subtype from the image, so the old name could describe other data (CodeRabbit on #9775).
@@ -190,7 +190,7 @@ pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &
 /// A stem that still has a dot (`scan.jpg.psd`: Windows could keep `scan.jpg`) or an upper-case
 /// extension (the user's spelling) keeps the whole name. Elsewhere the whole name is kept: the
 /// macOS panel has no type list, and rfd's Linux dialogs don't say which type was picked.
-fn dialog_file_name(suggested: &str, adds_extension: bool) -> Option<String> {
+pub(crate) fn dialog_file_name(suggested: &str, adds_extension: bool) -> Option<String> {
     let path = Path::new(suggested);
     let name = path.file_name()?.to_string_lossy().into_owned();
     let (Some(stem), Some(ext)) = (path.file_stem(), path.extension().and_then(|e| e.to_str())) else { return Some(name) };
@@ -202,6 +202,9 @@ fn dialog_file_name(suggested: &str, adds_extension: bool) -> Option<String> {
 /// is created here, on the main thread, with the window as its parent (a sheet on macOS, an owned
 /// modal window elsewhere), and a helper thread waits for it and hands the answer to the app.
 fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, reply: FileDialogReply) {
+    // File › Open and Save As carry a CraftCloud button on Windows, which rfd can't show.
+    #[cfg(all(windows, feature = "craftcloud"))]
+    let Some((request, reply)) = crate::win_file_dialog::show(request, parent, reply) else { return };
     let mut dialog = rfd::AsyncFileDialog::new();
     if let Some(parent) = parent {
         dialog = dialog.set_parent(parent);
@@ -295,7 +298,7 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
 /// The dialog's answer for the chosen `paths`, or the error for one whose name isn't valid
 /// Unicode, which a lossy copy would turn into another file's name (#6601). `saving`: the paths
 /// are to be written to.
-fn answer<'a>(paths: impl IntoIterator<Item = &'a Path>, saving: bool, make: impl FnOnce(Vec<String>) -> FileDialogAnswer) -> FileDialogAnswer {
+pub(crate) fn answer<'a>(paths: impl IntoIterator<Item = &'a Path>, saving: bool, make: impl FnOnce(Vec<String>) -> FileDialogAnswer) -> FileDialogAnswer {
     match paths.into_iter().map(|p| photocraft_ui_egui::file_open::path_text(p, saving)).collect() {
         Ok(paths) => make(paths),
         Err(e) => FileDialogAnswer::Unavailable(e),
@@ -303,7 +306,7 @@ fn answer<'a>(paths: impl IntoIterator<Item = &'a Path>, saving: bool, make: imp
 }
 
 /// [`answer`] for a dialog that picks one path.
-fn answer_one(path: &Path, saving: bool, make: impl FnOnce(String) -> FileDialogAnswer) -> FileDialogAnswer {
+pub(crate) fn answer_one(path: &Path, saving: bool, make: impl FnOnce(String) -> FileDialogAnswer) -> FileDialogAnswer {
     match photocraft_ui_egui::file_open::path_text(path, saving) {
         Ok(path) => make(path),
         Err(e) => FileDialogAnswer::Unavailable(e),

@@ -133,7 +133,11 @@ pub fn width(fields: &Map<String, Value>, available: f32) -> Option<f32> {
 
 /// Open Edit › Preferences on `section`.
 pub fn open_preferences(app: &mut PhotocraftApp, section: &str) -> u64 {
-    let section = if SECTIONS.iter().any(|(id, _)| *id == section) { section } else { "general" };
+    let section = if SECTIONS.iter().any(|(id, _)| *id == section) || (cfg!(all(feature = "craftcloud", not(target_arch = "wasm32"))) && section == super::fields::CLOUD_SECTION.0) {
+        section
+    } else {
+        "general"
+    };
     let working = preference_values(app.session.prefs());
     let order = field_order(app.session.prefs(), &working);
     open_kind(app, "prefs", "Preferences", json!({"section": section, "values": working, "__order": order}))

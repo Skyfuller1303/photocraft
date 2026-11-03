@@ -17,6 +17,9 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
             f.entry("__askWhereToSave").or_insert_with(|| json!(app.cloud.ask_setting()));
             let system = system_theme(app, ui.ctx());
+            #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+            prefs_body(ui, f, system, &mut app.cloud);
+            #[cfg(not(all(feature = "craftcloud", not(target_arch = "wasm32"))))]
             prefs_body(ui, f, system);
         }
         "shortcuts" => shortcuts_body(app, ui, f),
@@ -163,8 +166,25 @@ pub(super) fn preference_sections(values: &Value, search: &str) -> Vec<(&'static
         .collect()
 }
 
+/// Preferences › CraftCloud: the servers, the account and the Save As question.
+pub(super) const CLOUD_SECTION: (&str, &str) = ("craftcloud", "CraftCloud");
+
+/// Whether a search leaves the CraftCloud page in the section list.
+#[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+fn cloud_section_matches(search: &str) -> bool {
+    let query = search.trim().to_lowercase();
+    query.is_empty()
+        || ["craftcloud", "cloud", "server", "account", "sign in", "sign out", "ask where to save"].iter().any(|word| word.contains(&query) || query.contains(word))
+        || tl!(CLOUD_SECTION.1).to_lowercase().contains(&query)
+}
+
 /// Preferences: section list on the left, the section's settings on the right.
-fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui::Theme>) {
+fn prefs_body(
+    ui: &mut egui::Ui,
+    f: &mut Map<String, Value>,
+    system: Option<egui::Theme>,
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))] cloud: &mut crate::cloud::Runtime,
+) {
     let t = Tokens::get(ui.ctx());
     let mut section = f.get("section").and_then(Value::as_str).unwrap_or("general").to_string();
     let mut values = f.get("values").cloned().unwrap_or(Value::Null);
@@ -174,7 +194,13 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
     let mut ask_where_to_save = None;
     let mut search = f.get("__search").and_then(Value::as_str).unwrap_or("").to_string();
     crate::widgets::text_field(ui, ui.scope_id().with("prefs-search"), &mut search, tl!("Search settings…"), ui.available_width(), false);
-    let found = preference_sections(&values, &search);
+    #[allow(unused_mut)]
+    let mut found = preference_sections(&values, &search);
+    // CraftCloud is an app setting beside the engine's preferences, not one of its sections.
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    if cloud_section_matches(&search) {
+        found.push(CLOUD_SECTION);
+    }
     if !found.iter().any(|(id, _)| *id == section)
         && let Some((first, _)) = found.first()
     {
@@ -190,7 +216,7 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
             }
             for &(id, title) in &found {
                 let sel = section == id;
-                let empty = !has_visible_fields(&values, id);
+                let empty = !has_visible_fields(&values, id) && id != CLOUD_SECTION.0;
                 let (rect, resp) = ui.allocate_exact_size(vec2(170.0, 22.0), Sense::click());
                 if sel {
                     ui.painter().rect_filled(rect, t.radius_sm, t.row_selected);
@@ -224,7 +250,7 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
         crate::widgets::vline(ui, content_height);
         ui.vertical(|ui| {
             ui.set_width((ui.available_width() - 12.0).max(340.0));
-            let title = SECTIONS.iter().find(|(id, _)| *id == section).map_or("General", |(_, t)| *t);
+            let title = SECTIONS.iter().chain([&CLOUD_SECTION]).find(|(id, _)| *id == section).map_or("General", |(_, t)| *t);
             ui.label(RichText::new(tl!(&title)).font(crate::theme::semibold(14.0)).color(t.text));
             let show_all = search.trim().is_empty()
                 || title.to_lowercase().contains(&search.trim().to_lowercase())
@@ -234,20 +260,20 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
             egui::ScrollArea::vertical().max_height(content_height - 30.0).id_salt("prefs-scroll").show(ui, |ui| {
                 let order: Vec<String> =
                     f.get("__order").and_then(|o| o.get(&section)).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
-                if !has_visible_fields(&values, &section) {
+                if section == CLOUD_SECTION.0 {
+                    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+                    {
+                        // Windows' native Save dialog has its own CraftCloud button instead of the question.
+                        let mut ask = f.get("__askWhereToSave").and_then(Value::as_bool).unwrap_or(true);
+                        if cloud.prefs_page(ui, (!cfg!(windows)).then_some(&mut ask)) {
+                            ask_where_to_save = Some(ask);
+                        }
+                    }
+                } else if !has_visible_fields(&values, &section) {
                     ui.add_space(4.0);
                     ui.label(RichText::new(tl!("These settings aren't available in PhotoCraft yet.")).color(t.text_faint));
                 } else if let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut) {
                     section_fields(ui, &section, obj, &order, lang, system, filter);
-                    // Save As asks first whether to save to CraftCloud or on this computer.
-                    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
-                    if section == "fileHandling"
-                        && let Some(mut ask) = f.get("__askWhereToSave").and_then(Value::as_bool)
-                        && (filter.is_empty() || "ask where to save".contains(&filter.to_lowercase()))
-                        && crate::widgets::checkbox(ui, &mut ask, "Ask where to save").changed()
-                    {
-                        ask_where_to_save = Some(ask);
-                    }
                     if section == "fileHandling" {
                         ui.label(
                             RichText::new(tl!("0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized."))
@@ -260,6 +286,7 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
                     ui.add_space(8.0);
                 }
                 if search.trim().is_empty()
+                    && section != CLOUD_SECTION.0
                     && has_visible_fields(&values, &section)
                     && crate::widgets::secondary_button(ui, tl!("Reset Section"), 110.0).clicked()
                     && let Some(mut def) = prefs::Preferences::default().get(&section)

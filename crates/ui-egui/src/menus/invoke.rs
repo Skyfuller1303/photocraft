@@ -186,7 +186,7 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
     let result = match id {
         #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
         "file.craftcloud.open" => {
-            app.cloud.begin_open();
+            app.cloud.show_cloud_open();
             Ok(Value::Null)
         }
         #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]

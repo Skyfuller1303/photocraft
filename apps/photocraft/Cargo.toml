@@ -9,7 +9,7 @@ build = "build.rs"
 
 [features]
 default = ["craftcloud"]
-craftcloud = ["photocraft-ui-egui/craftcloud"]
+craftcloud = ["photocraft-ui-egui/craftcloud", "dep:photocraft-winfile"]
 # Open HEIC/HEIF photos (the optional photocraft-heif crate). Not default so distributors choose
 # it; official builds (CI, packaging/, release) build with `--features heif`.
 heif = ["photocraft-codecs/heif"]
@@ -111,6 +111,9 @@ winit = { version = "=0.30.13", default-features = false, features = ["x11"] }
 # Safe Windows screen-capture bindings; Linux uses the pure-Rust X11 client/portal.
 xcap = "=0.9.8"
 winsafe = { version = "=0.0.29", default-features = false, features = ["user"] }
+# With CraftCloud: Open and Save dialogs with a "Save to CraftCloud" / "Open from CraftCloud" button (`services.rs`):
+# rfd has no custom controls, and the COM calls need `unsafe`, so they live in this isolated crate.
+photocraft-winfile = { workspace = true, optional = true }
 
 # tests/mac_menu_appkit.rs: reads AppKit's menu bar back and sends it real key events.
 [target.'cfg(target_os = "macos")'.dev-dependencies]

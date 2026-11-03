@@ -65,6 +65,8 @@ mod presentation;
 mod print_portal;
 mod screen_color;
 mod services;
+#[cfg(all(windows, feature = "craftcloud"))]
+mod win_file_dialog;
 // macOS gets one instance from LaunchServices (open-documents Apple events).
 #[cfg(any(not(target_os = "macos"), test))]
 mod single_instance;

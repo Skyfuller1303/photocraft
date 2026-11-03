@@ -8,7 +8,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use craftcloud_client::{CloudError, CloudTransport, Request, Response};
-use craftcloud_egui::Dialog;
+use super::dialog::{Mode, View};
 use egui::{Event, Key, Modifiers};
 use egui_kittest::{
     Harness,
@@ -61,12 +61,6 @@ fn invoke(app: &mut PhotocraftApp, id: &str) -> Result<serde_json::Value, String
     crate::menus::invoke(app, &egui::Context::default(), id, json!({}))
 }
 
-fn sync(app: &mut PhotocraftApp) {
-    let mut cloud = std::mem::replace(&mut app.cloud, super::Runtime::new(None));
-    cloud.sync_picker(app);
-    app.cloud = cloud;
-}
-
 fn press(harness: &mut Harness<'static, PhotocraftApp>, key: Key) {
     for pressed in [true, false] {
         harness.event(Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: Modifiers::NONE });
@@ -104,8 +98,8 @@ fn choosing_cloud_opens_the_server_setup_when_cloud_is_not_configured() {
     h.get_by_label("Save to CraftCloud").click();
     h.run_steps(3);
     assert!(!h.state().cloud.save_chooser_open());
-    assert_eq!(h.state().cloud.picker.dialog, Some(Dialog::Server));
-    assert!(h.state().cloud.return_to_save, "the wizard continues into the save step");
+    assert_eq!(h.state().cloud.cloud_dialog_mode(), Some(Mode::Save));
+    assert_eq!(h.state().cloud.dialog_view(), View::NoServer, "the dialog points to the settings");
     assert!(requests.borrow().is_empty(), "choosing CraftCloud never opens the native dialog");
 }
 
@@ -119,10 +113,9 @@ fn choosing_cloud_with_a_configured_server_goes_to_sign_in_with_the_save_format_
     open_chooser(&mut h, "file.saveAs");
     h.get_by_label("Save to CraftCloud").click();
     h.run_steps(3);
-    assert_eq!(h.state().cloud.picker.dialog, Some(Dialog::Login));
-    let formats: Vec<_> = h.state().cloud.picker.save_formats.iter().map(|(id, _)| id.as_str()).collect();
-    assert_eq!(formats, ["pcraft", "psd"]);
-    assert_eq!(h.state().cloud.picker.save_format.as_deref(), Some("pcraft"), "native format is the default");
+    assert_eq!(h.state().cloud.cloud_dialog_mode(), Some(Mode::Save));
+    assert_eq!(h.state().cloud.dialog_view(), View::SignIn);
+    assert!(!h.state().cloud.save_as_psd, "native format is the default");
 }
 
 #[test]
@@ -177,7 +170,7 @@ fn the_preferences_toggle_turns_the_chooser_back_on() {
     let requests = Requests::default();
     let mut app = app(data.path(), &requests);
     app.cloud.set_asks_where_to_save(false);
-    let id = crate::prefs_ui::open_preferences(&mut app, "fileHandling");
+    let id = crate::prefs_ui::open_preferences(&mut app, "craftcloud");
     let mut h = harness(app);
     h.run_steps(3);
     h.get_by_label("Ask where to save").click();
@@ -228,7 +221,7 @@ fn enter_chooses_cloud() {
     open_chooser(&mut h, "file.saveAs");
     press(&mut h, Key::Enter);
     assert!(!h.state().cloud.save_chooser_open());
-    assert_eq!(h.state().cloud.picker.dialog, Some(Dialog::Server), "Enter means CraftCloud");
+    assert_eq!(h.state().cloud.cloud_dialog_mode(), Some(Mode::Save), "Enter means CraftCloud");
     assert!(requests.borrow().is_empty());
 }
 
@@ -298,25 +291,4 @@ fn save_on_a_cloud_linked_document_saves_a_version_without_the_chooser() {
     crate::menus::invoke(&mut app, &ctx, "file.save", json!({})).expect("Save a linked document");
     assert!(!app.cloud.save_chooser_open(), "Save on a linked document never asks");
     assert_eq!(written.borrow().as_slice(), [local.to_string_lossy().into_owned()], "it writes the working file, which uploads the version");
-}
-
-#[test]
-fn the_save_format_choice_switches_psd_and_renames_the_file() {
-    let data = tempfile::tempdir().expect("data dir");
-    let requests = Requests::default();
-    let mut app = app(data.path(), &requests);
-    app.cloud.begin_save();
-    sync(&mut app);
-    app.cloud.picker.file_name = "Poster.pcraft".into();
-    app.cloud.picker.save_format = Some("psd".into());
-    sync(&mut app);
-    assert!(app.cloud.save_as_psd);
-    assert_eq!(app.cloud.picker.file_name, "Poster.psd");
-    app.cloud.picker.save_format = Some("pcraft".into());
-    sync(&mut app);
-    assert!(!app.cloud.save_as_psd);
-    assert_eq!(app.cloud.picker.file_name, "Poster.pcraft");
-    assert_eq!(super::strip_format_extension("a.PSD"), "a");
-    assert_eq!(super::strip_format_extension("a.png"), "a.png");
-    assert_eq!(super::strip_format_extension("ä"), "ä");
 }

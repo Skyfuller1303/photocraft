@@ -1,0 +1,27 @@
+[package]
+name = "photocraft-winfile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Windows Open and Save dialogs with an extra push button (Save to CraftCloud, Open from CraftCloud)"
+
+# An isolated `unsafe` helper crate next to `photocraft-tablet` (see AGENTS.md, No unsafe): the
+# Common Item Dialog is a COM API, and the extra button needs a COM event sink, which no safe
+# binding in the workspace offers. Only `src/dialog.rs` allows `unsafe`; everything else is denied,
+# and every other crate keeps the workspace's `unsafe_code = "forbid"`.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"
+
+# Already in Cargo.lock (eframe, winit and xcap pull it in); pinned exactly: review the diff before
+# bumping.
+[target.'cfg(target_os = "windows")'.dependencies]
+# `#[implement]` expands to paths in `windows_core`, which must be a direct dependency.
+windows-core = "=0.62.2"
+windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Shell_Common"] }

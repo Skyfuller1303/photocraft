@@ -24,6 +24,12 @@ pub mod permissions;
 #[path = "cloud_save_chooser.rs"]
 pub(crate) mod save_chooser;
 
+#[path = "cloud_dialog.rs"]
+pub(crate) mod dialog;
+
+#[path = "cloud_prefs.rs"]
+mod prefs_page;
+
 struct CloudTranslator;
 
 impl Translator for CloudTranslator {
@@ -462,7 +468,6 @@ pub struct Runtime {
     pending_admissions: HashMap<PathBuf, PendingAdmission>,
     local_open_requests: Vec<String>,
     startup_error: Option<String>,
-    return_to_save: bool,
     client: Option<NativeClient>,
     client_server: Option<String>,
     links: Option<Arc<LinksStore>>,
@@ -489,6 +494,11 @@ pub struct Runtime {
     save_chooser: Option<save_chooser::Chooser>,
     /// "Save on this computer" was chosen: the app continues with the native Save As.
     local_save: Option<save_chooser::Chooser>,
+    /// The upload the Save dialog started (a new version of an existing file): only its success
+    /// closes the dialog, not a background save that happens to finish meanwhile.
+    dialog_upload: Option<PathBuf>,
+    /// The Open dialog's "This computer" was chosen: the app continues with the native Open.
+    local_open: bool,
     request_tx: mpsc::Sender<WorkerResult>,
     request_rx: mpsc::Receiver<WorkerResult>,
     request_busy: bool,
@@ -499,8 +509,14 @@ pub struct Runtime {
     selected_project: Option<Uuid>,
     /// Remembered selection of the current server, read when the hierarchy is loaded.
     preferred: LastSelection,
-    /// Fill the save dialog's file name from the active document on the next frame.
-    prefill_file_name: bool,
+    /// The Cloud Save or Open dialog, while it is open.
+    cloud_dialog: Option<dialog::State>,
+    /// The Open dialog lists the files shared with the user instead of a project's files.
+    browsing_shared: bool,
+    /// Text of Preferences › CraftCloud › Add server.
+    server_input: String,
+    /// The running sign-in only restores a stored session: its failure is not an error to show.
+    restoring: bool,
     files: HashMap<Uuid, craftcloud_client::File>,
     workspace_names: HashMap<Uuid, String>,
     document_workspaces: HashMap<photocraft_doc::DocId, String>,
@@ -790,7 +806,6 @@ impl Runtime {
             pending_admissions: HashMap::new(),
             local_open_requests: Vec::new(),
             startup_error,
-            return_to_save: false,
             client: None,
             client_server: None,
             links: paths.as_ref().map(|paths| Arc::new(LinksStore::new(&paths.root))),
@@ -812,6 +827,8 @@ impl Runtime {
             save_locked_recovery: false,
             save_chooser: None,
             local_save: None,
+            dialog_upload: None,
+            local_open: false,
             request_tx,
             request_rx,
             request_busy: false,
@@ -821,7 +838,10 @@ impl Runtime {
             selected_workspace: None,
             selected_project: None,
             preferred: LastSelection::default(),
-            prefill_file_name: false,
+            cloud_dialog: None,
+            browsing_shared: false,
+            server_input: String::new(),
+            restoring: false,
             files: HashMap::new(),
             workspace_names: HashMap::new(),
             document_workspaces: HashMap::new(),
@@ -908,40 +928,12 @@ impl Runtime {
         self.local_open_requests.push(path_buf.to_string_lossy().into_owned());
     }
 
-    pub fn begin_open(&mut self) {
-        self.return_to_save = false;
-        if let Some(server) = self.config.selected() {
-            self.picker.server_url = server.url.clone();
-            if let Some(account) = &server.account {
-                self.picker.email = account.clone();
-            }
-        }
-        self.picker.dialog = Some(if self.config.selected().is_none() {
-            Dialog::Server
-        } else if self.client.is_some() {
-            Dialog::Browse
-        } else {
-            Dialog::Login
-        });
-        if self.client.is_some() && self.picker.organizations.is_empty() {
-            self.load_organizations();
-            return;
-        }
-        if self.client.is_some()
-            && self.files.is_empty()
-            && let Some(project) = self.selected_project
-        {
-            self.picker.dialog = Some(Dialog::Browse);
-            self.select_project(project);
-        }
-    }
-
     pub fn configured(&self) -> bool {
         self.config.selected().is_some()
     }
 
     pub(crate) fn blocks_input(&self) -> bool {
-        self.picker.dialog.is_some() || self.save_locked_recovery || self.save_chooser.is_some()
+        self.picker.dialog.is_some() || self.save_locked_recovery || self.save_chooser.is_some() || self.cloud_dialog.is_some()
     }
 
     /// Whether File › Save As asks "CraftCloud or this computer" first. Without an app data
@@ -976,7 +968,7 @@ impl Runtime {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(windows)))]
     pub(crate) fn save_chooser_open(&self) -> bool {
         self.save_chooser.is_some()
     }
@@ -993,14 +985,16 @@ impl Runtime {
             self.set_asks_where_to_save(false);
         }
         match choice {
-            save_chooser::Choice::Cloud => self.begin_save(),
+            save_chooser::Choice::Cloud => {
+                self.show_cloud_save(chooser.doc, None, chooser.choices, chooser.plain_save);
+            }
             save_chooser::Choice::Computer => self.local_save = Some(chooser),
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn test_server_url(&self) -> &str {
-        &self.picker.server_url
+    pub(crate) fn test_email(&self) -> &str {
+        &self.picker.email
     }
 
     pub fn open_link(&mut self, raw: &str) -> Result<(), String> {
@@ -1022,6 +1016,7 @@ impl Runtime {
                 self.picker.server_url = request.server.clone();
                 self.client = None;
                 self.client_server = None;
+                self.cloud_dialog = None;
                 self.picker.dialog = Some(Dialog::Login);
             }
         }
@@ -1045,52 +1040,6 @@ impl Runtime {
             }
         }
         Ok(None)
-    }
-
-    pub fn begin_save(&mut self) {
-        self.save_as_psd = false;
-        self.begin_save_intent();
-    }
-
-    fn begin_save_intent(&mut self) {
-        self.return_to_save = true;
-        self.prefill_file_name = true;
-        self.picker.selected_file = None;
-        self.picker.save_formats = SAVE_FORMATS.iter().map(|(id, label)| (id.to_string(), tl!(label).to_string())).collect();
-        self.picker.save_format_label = tl!("Format").into();
-        self.picker.save_format = Some(if self.save_as_psd { "psd" } else { "pcraft" }.into());
-        if let Some(server) = self.config.selected() {
-            self.picker.server_url = server.url.clone();
-            if let Some(account) = &server.account {
-                self.picker.email = account.clone();
-            }
-        }
-        self.picker.dialog = Some(if self.config.selected().is_none() {
-            Dialog::Server
-        } else if self.client.is_some() && self.selected_project.is_none() {
-            Dialog::Browse
-        } else if self.client.is_some() {
-            Dialog::Save
-        } else {
-            Dialog::Login
-        });
-        if self.client.is_some() && self.picker.organizations.is_empty() {
-            self.picker.dialog = Some(Dialog::Browse);
-            self.load_organizations();
-            return;
-        }
-        if self.client.is_some()
-            && self.files.is_empty()
-            && let Some(project) = self.selected_project
-        {
-            self.picker.dialog = Some(Dialog::Browse);
-            self.select_project(project);
-        }
-    }
-
-    pub fn begin_save_psd(&mut self) {
-        self.save_as_psd = true;
-        self.begin_save_intent();
     }
 
     pub(crate) fn take_deferred_local_save(&mut self) -> Option<DeferredLocalSave> {
@@ -1120,7 +1069,7 @@ impl Runtime {
                 self.picker.email = account;
             }
             self.pending_open = Some(request.clone());
-            self.picker.dialog = Some(if self.client.is_some() { Dialog::Browse } else { Dialog::Login });
+            self.picker.dialog = if self.client.is_some() { None } else { Some(Dialog::Login) };
             return Ok(Some(request));
         }
         self.picker.server_url = request.server.clone();
@@ -1129,36 +1078,24 @@ impl Runtime {
         Ok(None)
     }
 
-    /// Render the SDK picker using the app's current English/German language choice.
+    /// Renders the CraftCloud dialogs. Save and Open are PhotoCraft's own (see [`dialog`]); the
+    /// SDK picker only draws the server trust, sign-in, conflict, lock and offline prompts.
     pub fn show(&mut self, app: &mut crate::PhotocraftApp, ctx: &egui::Context, app_lang: &str) -> Vec<Action> {
         let _ = app_lang;
         self.apply_worker_result(app);
         if self.blocks_input() && !self.request_busy && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.handle_action(app, Action::Cancel);
         }
-        self.sync_picker(app);
+        self.sync_picker();
         if let Some(chooser) = self.save_chooser.as_mut()
             && let Some(outcome) = save_chooser::show(ctx, chooser)
         {
             self.answer_save_chooser(outcome);
         }
+        self.show_cloud_dialog(app, ctx);
         let actions = self.picker.show(ctx, &CloudTranslator);
         for action in &actions {
             self.handle_action(app, action.clone());
-        }
-        if self.return_to_save && self.picker.dialog == Some(Dialog::Save) && !self.files.is_empty() {
-            let mut files: Vec<_> = self.files.values().map(|file| (file.id.to_string(), file.name.clone())).collect();
-            files.sort_by_key(|left| left.1.to_lowercase());
-            let selected = self.picker.selected_file.clone();
-            egui::Window::new(tl!("Existing CraftCloud files")).resizable(true).show(ctx, |ui| {
-                ui.label(tl!("Select a file to save a new version."));
-                for (id, name) in &files {
-                    if ui.selectable_label(selected.as_deref() == Some(id.as_str()), name).clicked() {
-                        self.picker.selected_file = Some(id.clone());
-                        self.picker.file_name = name.clone();
-                    }
-                }
-            });
         }
         if self.save_locked_recovery {
             let mut selected = None;
@@ -1505,6 +1442,7 @@ impl Runtime {
                         self.client_server = None;
                     }
                     self.clear_hierarchy();
+                    self.cloud_dialog = None;
                     self.picker.dialog = Some(Dialog::Login);
                     self.picker.error = None;
                 }
@@ -1531,19 +1469,12 @@ impl Runtime {
             Action::OpenShared => self.list_shared(),
             Action::OpenFile(id) => {
                 if let Ok(id) = Uuid::parse_str(&id) {
-                    if self.return_to_save {
-                        self.picker.selected_file = Some(id.to_string());
-                        if let Some(file) = self.files.get(&id) {
-                            self.picker.file_name = file.name.clone();
-                        }
-                        self.picker.dialog = Some(Dialog::Save);
-                        return;
-                    }
                     if let Some(file) = self.files.get(&id)
                         && let Some(path) = self.open_path_for_file(&file.id.to_string(), self.client_server.as_deref().unwrap_or_default())
                         && app.show_if_open(&path)
                     {
                         self.picker.dialog = None;
+                        self.cloud_dialog = None;
                         return;
                     }
                     self.open_file(id);
@@ -1565,7 +1496,9 @@ impl Runtime {
             }
             Action::Cancel => {
                 self.save_chooser = None;
-                self.return_to_save = false;
+                self.cloud_dialog = None;
+                self.dialog_upload = None;
+                self.browsing_shared = false;
                 self.save_as_psd = false;
                 self.save_locked_recovery = false;
                 self.pending_locked_open = None;
@@ -1587,30 +1520,12 @@ impl Runtime {
         }
     }
 
-    /// Mirror the runtime selection into the picker, and prefill the save name once per save.
-    fn sync_picker(&mut self, app: &crate::PhotocraftApp) {
+    /// Mirror the runtime selection into the picker, which the SDK prompts and the dialogs read.
+    fn sync_picker(&mut self) {
         self.picker.selected_organization = self.selected_org.map(|id| id.to_string());
         self.picker.selected_workspace = self.selected_workspace.map(|id| id.to_string());
         self.picker.selected_project = self.selected_project.map(|id| id.to_string());
         self.picker.loading = self.request_busy;
-        if std::mem::take(&mut self.prefill_file_name)
-            && let Some(st) = app.session.active()
-        {
-            let extension = if self.save_as_psd { "psd" } else { "pcraft" };
-            self.picker.file_name = craftcloud_egui::file_name_with_extension(document_stem(&st.doc.name), extension);
-        }
-        // The format dropdown of the save step decides between the native format and PSD; the
-        // file name follows it.
-        if let Some(format) = self.picker.save_format.as_deref()
-            && (format == "psd") != self.save_as_psd
-        {
-            self.save_as_psd = format == "psd";
-            let name = self.picker.file_name.trim();
-            if !name.is_empty() {
-                let stem = strip_format_extension(name);
-                self.picker.file_name = craftcloud_egui::file_name_with_extension(stem, format);
-            }
-        }
     }
 
     fn reload_preferred(&mut self, server: &str) {
@@ -1636,6 +1551,7 @@ impl Runtime {
         if self.request_busy {
             return;
         }
+        self.browsing_shared = false;
         // Going back is a deliberate choice: do not jump forward again to the remembered entries.
         self.preferred = LastSelection::default();
         match level {
@@ -1661,7 +1577,6 @@ impl Runtime {
         self.picker.selected_file = None;
         self.picker.error = None;
         self.picker.show_new_project = false;
-        self.picker.dialog = Some(Dialog::Browse);
     }
 
     fn create_project(&mut self, name: String) {
@@ -1687,6 +1602,7 @@ impl Runtime {
     }
 
     fn clear_hierarchy(&mut self) {
+        self.browsing_shared = false;
         self.selected_org = None;
         self.selected_workspace = None;
         self.selected_project = None;
@@ -1700,6 +1616,18 @@ impl Runtime {
     }
 
     fn login(&mut self, server: String, email: String, password: String, second_factor: Option<String>) {
+        self.start_login(server, email, password, second_factor, false);
+    }
+
+    /// Signs in again from the refresh token the keychain holds for `email` on the selected server,
+    /// without asking for the password. A missing or rejected token leaves the user signed out.
+    fn restore_session(&mut self) {
+        let Some(server) = self.config.selected().cloned() else { return };
+        let Some(email) = server.account else { return };
+        self.start_login(server.url, email, String::new(), None, true);
+    }
+
+    fn start_login(&mut self, server: String, email: String, password: String, second_factor: Option<String>, restore_only: bool) {
         if self.request_busy {
             return;
         }
@@ -1714,6 +1642,7 @@ impl Runtime {
         let challenge_id = self.picker.second_factor_challenge_id.clone();
         let tx = self.request_tx.clone();
         let Some(context) = self.begin_request(&server) else { return };
+        self.restoring = restore_only;
         std::thread::Builder::new()
             .name("photocraft-cloud-auth".into())
             .spawn(move || {
@@ -1741,6 +1670,9 @@ impl Runtime {
                                 Err(error) => return Err(error),
                             }
                         }
+                        if restore_only {
+                            return Err(CloudError::Unauthorized);
+                        }
                         client.login(&email, &password, "app", "photocraft", "PhotoCraft")?;
                     }
                     let user = client.current_user()?;
@@ -1750,6 +1682,7 @@ impl Runtime {
             })
             .map_err(|error| {
                 self.finish_request();
+                self.restoring = false;
                 self.picker.error = Some(error.to_string());
             })
             .ok();
@@ -1761,6 +1694,7 @@ impl Runtime {
         }
         let Some(client) = self.client.clone() else { return };
         let Some(server) = self.client_server.clone() else { return };
+        self.browsing_shared = false;
         self.selected_org = Some(id);
         self.selected_workspace = None;
         self.selected_project = None;
@@ -1782,6 +1716,7 @@ impl Runtime {
         }
         let Some(client) = self.client.clone() else { return };
         let Some(server) = self.client_server.clone() else { return };
+        self.browsing_shared = false;
         self.selected_workspace = Some(id);
         self.selected_project = None;
         self.remember_selection();
@@ -1800,6 +1735,7 @@ impl Runtime {
         }
         let Some(client) = self.client.clone() else { return };
         let Some(server) = self.client_server.clone() else { return };
+        self.browsing_shared = false;
         self.selected_project = Some(id);
         self.remember_selection();
         self.files.clear();
@@ -1819,6 +1755,12 @@ impl Runtime {
         let Some(server) = self.client_server.clone() else { return };
         let Some(org) = self.selected_org else { return };
         let Some(context) = self.begin_request(&server) else { return };
+        self.browsing_shared = true;
+        self.selected_workspace = None;
+        self.selected_project = None;
+        self.files.clear();
+        self.picker.files.clear();
+        self.picker.selected_file = None;
         let tx = self.request_tx.clone();
         std::thread::spawn(move || {
             let result = all_pages::<SharedTarget>(&client, &format!("/api/v1/organizations/{org}/shared-with-me")).and_then(|targets| {
@@ -1900,7 +1842,7 @@ impl Runtime {
             self.picker.error = Some(tl!("Choose a CraftCloud project first.").into());
             return;
         };
-        let Some(doc) = app.session.active().map(|st| st.doc.id) else {
+        let Some(doc) = self.cloud_dialog.as_ref().and_then(|dialog| dialog.doc).or_else(|| app.session.active().map(|st| st.doc.id)) else {
             self.picker.error = Some(tl!("Open a document before saving to CraftCloud.").into());
             return;
         };
@@ -1940,9 +1882,9 @@ impl Runtime {
         }
         self.pending_new_file = Some(PendingNewFile { doc, project_id, name: cloud_name, format: format.into(), bind_document, server });
         self.deferred_local_save = Some(DeferredLocalSave { path, copy: !bind_document, doc });
-        self.return_to_save = false;
         self.picker.selected_file = None;
         self.picker.dialog = None;
+        self.cloud_dialog = None;
     }
 
     fn save_version(&mut self, app: &mut crate::PhotocraftApp, id: Uuid, overwrite: bool) {
@@ -1950,7 +1892,11 @@ impl Runtime {
             return;
         }
         let Some(file) = self.files.get(&id).cloned() else { return };
-        let Some(st) = app.session.active() else { return };
+        let dialog_doc = self.cloud_dialog.as_ref().and_then(|dialog| dialog.doc);
+        let Some(st) = dialog_doc.map_or_else(|| app.session.active(), |doc| app.session.documents().iter().find(|st| st.doc.id == doc)) else {
+            self.picker.error = Some(tl!("Open a document before saving to CraftCloud.").into());
+            return;
+        };
         if self.read_only_documents.contains(&st.doc.id) {
             self.picker.error = Some(tl!("This CraftCloud document is open read-only. Save a new editable copy first.").into());
             return;
@@ -2013,8 +1959,8 @@ impl Runtime {
             link.base_version = file.head_version_id.map(|v| v.to_string());
         }
         let Some(context) = self.begin_request(&server) else { return };
-        self.return_to_save = false;
         self.save_as_psd = false;
+        self.dialog_upload = self.cloud_dialog.is_some().then(|| path.clone());
         let idempotency_key = Uuid::new_v4().to_string();
         let workspace = self.workspace_names.get(&file.workspace_id).cloned();
         self.pending_uploads.insert(
@@ -2163,10 +2109,7 @@ impl Runtime {
         });
     }
     fn logout(&mut self) {
-        let Some(client) = self.client.clone() else {
-            self.picker.dialog = Some(Dialog::Login);
-            return;
-        };
+        let Some(client) = self.client.clone() else { return };
         if self.request_busy {
             return;
         }
@@ -2185,6 +2128,7 @@ impl Runtime {
         }
         let server = result.context.server.clone();
         let upload_failed = matches!(&result.event, WorkerEvent::Upload(Err(_)));
+        let restoring = std::mem::take(&mut self.restoring) && matches!(&result.event, WorkerEvent::Login(_));
         self.finish_request();
         match result.event {
             WorkerEvent::Login(Ok((client, user, locks_supported))) => {
@@ -2202,7 +2146,7 @@ impl Runtime {
                 self.client = Some(client.clone());
                 self.reload_preferred(&server);
                 self.locks_supported = locks_supported;
-                self.picker.dialog = Some(if self.return_to_save && self.selected_project.is_some() { Dialog::Save } else { Dialog::Browse });
+                self.picker.dialog = None;
                 self.picker.error = None;
                 self.picker.requires_second_factor = false;
                 self.picker.second_factor_challenge_id = None;
@@ -2223,8 +2167,9 @@ impl Runtime {
                 self.picker.requires_second_factor = true;
                 self.picker.second_factor_challenge_id = Some(challenge);
                 self.picker.password.clear();
-                self.picker.dialog = Some(Dialog::Login);
             }
+            // A stored session that is gone or expired just means the user has to sign in.
+            WorkerEvent::Login(Err(_)) if restoring => {}
             WorkerEvent::Login(Err(error)) => self.show_error(error),
             WorkerEvent::Organizations(Ok(items)) => {
                 self.picker.organizations = items.into_iter().map(|x| (x.id.to_string(), x.name)).collect();
@@ -2265,14 +2210,12 @@ impl Runtime {
             WorkerEvent::Files(Ok(items)) => {
                 self.files = items.iter().map(|f| (f.id, f.clone())).collect();
                 self.picker.files = items.into_iter().map(|f| (f.id.to_string(), f.name)).collect();
-                if self.return_to_save {
-                    self.picker.dialog = Some(Dialog::Save);
-                }
             }
             WorkerEvent::Open(Ok(payload)) if payload.3.is_some() => {
                 let (file, bytes, _editable, locked_by, _lease) = *payload;
                 self.picker.locked_by = locked_by;
                 self.picker.dialog = Some(Dialog::Lock);
+                self.cloud_dialog = None;
                 self.pending_locked_open = Some((server.clone(), file, bytes));
             }
             WorkerEvent::Open(Ok(payload)) => {
@@ -2280,6 +2223,7 @@ impl Runtime {
                 match self.install_download(server.clone(), file, bytes, editable, locked_by, lease) {
                     Ok(()) => {
                         self.picker.dialog = None;
+                        self.cloud_dialog = None;
                         self.picker.error = None;
                     }
                     Err(e) => self.picker.error = Some(e),
@@ -2311,18 +2255,24 @@ impl Runtime {
                 if self.retry_path.as_ref() == Some(&path) {
                     self.retry_path = None;
                 }
-                self.picker.error = None;
+                self.dialog_upload_finished(&path, true);
                 self.save_locked_recovery = false;
             }
             WorkerEvent::Logout(result) => {
                 self.client = None;
                 self.client_server = None;
-                self.picker.dialog = Some(Dialog::Login);
+                self.locks_supported = false;
+                self.clear_hierarchy();
                 if let Err(e) = result {
                     self.picker.error = Some(format!("Signed out locally; server logout failed: {e:?}"));
                 }
             }
             WorkerEvent::Upload(Err((path, error))) => {
+                self.dialog_upload_finished(&path, false);
+                // The retry prompt (it reuses the stored idempotency key) must not sit under the dialog.
+                if matches!(error, CloudError::Offline | CloudError::Unreachable) {
+                    self.cloud_dialog = None;
+                }
                 if let Some(new) = self.pending_new_uploads.get(&path).cloned()
                     && let Some(link) = self.links.as_ref().and_then(|links| links.get(&path).ok().flatten())
                 {
@@ -2398,6 +2348,7 @@ impl Runtime {
         if let Some(owner) = locked_by {
             self.picker.locked_by = Some(owner);
             self.picker.dialog = Some(Dialog::Lock);
+            self.cloud_dialog = None;
         }
         Ok(())
     }
@@ -2405,17 +2356,18 @@ impl Runtime {
     fn show_error(&mut self, error: CloudError) {
         self.picker.error = Some(match error {
             CloudError::Offline => {
-                self.picker.dialog = Some(Dialog::Offline);
+                self.offline_prompt();
                 tl!("Connection ended after the request may have completed. Check the file before retrying.").into()
             }
             CloudError::Unreachable => {
-                self.picker.dialog = Some(Dialog::Offline);
+                self.offline_prompt();
                 tl!("CraftCloud server is unreachable. Retry when connected.").into()
             }
             CloudError::TlsHandshake => {
                 tl!("The server does not speak HTTPS at this address. Check the address and port, or use http:// for a local test server.").into()
             }
             CloudError::VersionConflict(_) => {
+                self.cloud_dialog = None;
                 self.picker.dialog = Some(Dialog::Conflict);
                 tl!("This file changed on CraftCloud. Save as a new file or reload the latest version.").into()
             }
@@ -2425,6 +2377,29 @@ impl Runtime {
             }
             other => format!("CraftCloud: {other:?}"),
         });
+    }
+
+    /// An upload ended. A version saved from the Save dialog closes it on success; other uploads (a
+    /// background save) leave an open dialog and its error line alone.
+    fn dialog_upload_finished(&mut self, path: &Path, success: bool) {
+        let ours = self.dialog_upload.as_deref() == Some(path);
+        if ours {
+            self.dialog_upload = None;
+        }
+        if success && (ours || self.cloud_dialog.is_none()) {
+            self.picker.error = None;
+        }
+        if success && ours {
+            self.cloud_dialog = None;
+        }
+    }
+
+    /// An unreachable server is reported inline while the Save or Open dialog is up; otherwise the
+    /// offline prompt (retry the upload) comes up.
+    fn offline_prompt(&mut self) {
+        if self.cloud_dialog.is_none() {
+            self.picker.dialog = Some(Dialog::Offline);
+        }
     }
 
     pub fn take_pending_open(&mut self) -> Option<OpenRequest> {
@@ -2448,9 +2423,15 @@ mod cloud_e2e_tests;
 #[path = "cloud_wizard_tests.rs"]
 mod wizard_tests;
 
-#[cfg(test)]
+// The Save As question belongs to the platforms without a native Save dialog button: on Windows
+// Save As goes straight to the native dialog, which has the CraftCloud button instead.
+#[cfg(all(test, not(windows)))]
 #[path = "cloud_chooser_tests.rs"]
 mod chooser_tests;
+
+#[cfg(test)]
+#[path = "cloud_settings_tests.rs"]
+mod settings_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2595,14 +2576,14 @@ mod tests {
         runtime.selected_project = None;
         let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
 
-        runtime.begin_open();
-        assert!(matches!(runtime.picker.dialog, Some(Dialog::Browse)));
+        runtime.show_cloud_open();
+        assert_eq!(runtime.cloud_dialog_mode(), Some(dialog::Mode::Open));
         wait_for_request(&mut runtime, &mut app);
         assert_eq!(transport.0.load(Ordering::SeqCst), 1);
 
+        runtime.handle_action(&mut app, Action::Cancel);
         runtime.begin_save();
-        assert!(matches!(runtime.picker.dialog, Some(Dialog::Browse)));
-        assert!(runtime.return_to_save);
+        assert_eq!(runtime.cloud_dialog_mode(), Some(dialog::Mode::Save));
         wait_for_request(&mut runtime, &mut app);
         assert_eq!(transport.0.load(Ordering::SeqCst), 2);
     }

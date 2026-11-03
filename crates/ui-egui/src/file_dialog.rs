@@ -46,6 +46,10 @@ pub enum FileDialogAnswer {
     SaveTo(String),
     /// The selected folder's path (desktop).
     FolderTo(String),
+    /// The Windows dialog's CraftCloud button was clicked (see [`FileDialogReply::cloud_button`]):
+    /// the dialog is closed and the app opens its own CraftCloud dialog. For Save As, `file_name`
+    /// is the name typed so far, without its extension.
+    Cloud { file_name: Option<String> },
     /// No dialog could be shown (on Linux: no desktop portal and no zenity, #3354; the message
     /// says what to install), or the file chosen can't be used (a name that isn't valid Unicode,
     /// #6601). Reported as an error rather than taken for Cancel.
@@ -57,9 +61,18 @@ pub enum FileDialogAnswer {
 pub struct FileDialogReply {
     tx: Sender<Option<FileDialogAnswer>>,
     ctx: egui::Context,
+    cloud_button: Option<String>,
 }
 
 impl FileDialogReply {
+    /// The label of the extra CraftCloud button the dialog offers ("Save to CraftCloud" in Save As,
+    /// "Open from CraftCloud" in File › Open), already translated. `None`: no button, which is every
+    /// dialog but those two on Windows, the one platform whose dialog can show it. A click answers
+    /// [`FileDialogAnswer::Cloud`].
+    pub fn cloud_button(&self) -> Option<&str> {
+        self.cloud_button.as_deref()
+    }
+
     pub fn send(self, answer: Option<FileDialogAnswer>) {
         // Nothing is waiting any more when the app has quit meanwhile.
         let _ = self.tx.send(answer);
@@ -88,6 +101,32 @@ pub(crate) struct Pending {
     /// The save dialog's answer while the app asks whether to replace the file it writes to
     /// (`replace_prompt`).
     held: Option<FileDialogAnswer>,
+    /// What the CraftCloud button of this dialog continues with; `None`: the dialog has none.
+#[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    cloud: Option<CloudTarget>,
+}
+
+/// What the CraftCloud button of a native file dialog opens, with what the dialog was asked for.
+#[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum CloudTarget {
+    /// File › Open: the CraftCloud file picker.
+    Open,
+    /// Save As of `doc`: the CraftCloud save dialog, to continue as the native dialog would have.
+    Save { doc: DocId, choices: crate::FormatChoices, plain_save: bool },
+}
+
+#[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+impl CloudTarget {
+    /// The button's label, translated; `None` where no CraftCloud button is offered: any platform
+    /// but Windows, whose Save As asks CraftCloud or this computer first instead.
+    fn label(self) -> Option<String> {
+        cfg!(windows).then(|| match self {
+            CloudTarget::Open => tl!("Open from CraftCloud"),
+            CloudTarget::Save { .. } => tl!("Save to CraftCloud"),
+        })
+        .map(str::to_string)
+    }
 }
 
 /// The error of a cancelled dialog: not reported, since backing out is the user's choice.
@@ -124,7 +163,15 @@ impl PhotocraftApp {
             Some(FileDialogAnswer::Unavailable(why)) => Err(why),
             Some(a) => then(app, a),
         });
-        self.file_dialog = Some(Pending { request: Some(request), answer: None, then, saved_path: None, held: None });
+        self.file_dialog = Some(Pending {
+            request: Some(request),
+            answer: None,
+            then,
+            saved_path: None,
+            held: None,
+            #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+            cloud: None,
+        });
         Ok(json!({ "fileDialog": kind }))
     }
 
@@ -243,7 +290,7 @@ impl PhotocraftApp {
     /// File › Open: opens every chosen file, reporting each failure (see [`Self::open_paths`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
-        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, |app, answer| {
+        let asked = self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, |app, answer| {
             match answer {
                 FileDialogAnswer::Paths(paths) => {
                     app.open_paths(&paths);
@@ -251,10 +298,15 @@ impl PhotocraftApp {
                 FileDialogAnswer::Contents(name, bytes) => app.open_contents(vec![(name, bytes)]),
                 FileDialogAnswer::ContentsMany(files) => app.open_contents(files),
                 FileDialogAnswer::FolderTo(_) => return Err(UNEXPECTED.into()),
-                FileDialogAnswer::SaveTo(_) | FileDialogAnswer::Unavailable(_) => return Err(UNEXPECTED.into()),
+                FileDialogAnswer::SaveTo(_) | FileDialogAnswer::Cloud { .. } | FileDialogAnswer::Unavailable(_) => return Err(UNEXPECTED.into()),
             }
             Ok(Value::Null)
-        })
+        });
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        if asked.is_ok() {
+            self.offer_cloud_button(CloudTarget::Open);
+        }
+        asked
     }
 
     /// Opens each picked file's contents as its own document, in name order (like
@@ -320,8 +372,12 @@ impl PhotocraftApp {
         if let Some(request) = p.request.take() {
             let (tx, rx) = mpsc::channel();
             p.answer = Some(rx);
+            #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+            let cloud_button = p.cloud.and_then(CloudTarget::label);
+            #[cfg(not(all(feature = "craftcloud", not(target_arch = "wasm32"))))]
+            let cloud_button = None;
             if let Some(show) = self.services.file_dialog.as_mut() {
-                show(request, parent, FileDialogReply { tx, ctx: ctx.clone() });
+                show(request, parent, FileDialogReply { tx, ctx: ctx.clone(), cloud_button });
             }
         }
         let answer = match p.answer.as_ref().map(Receiver::try_recv) {
@@ -330,6 +386,11 @@ impl PhotocraftApp {
             // The reply was dropped unanswered: the dialog couldn't be shown.
             Some(Err(TryRecvError::Disconnected)) | None => None,
         };
+        #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+        if let Some(FileDialogAnswer::Cloud { file_name }) = &answer {
+            self.finish_cloud_button(file_name.clone());
+            return;
+        }
         if let Some(FileDialogAnswer::SaveTo(answered)) = &answer
             && let Some(path) = self.file_dialog.as_ref().and_then(|p| p.saved_path.as_ref()).map(|written| written(self, answered))
             && self.replaces_unasked(answered, &path)
@@ -342,6 +403,30 @@ impl PhotocraftApp {
             return;
         }
         let _ = self.finish_file_dialog(answer);
+    }
+
+    /// The dialog's CraftCloud button was clicked: the native dialog's action is dropped (the user
+    /// chose CraftCloud instead of it) and the CraftCloud dialog opens in its place.
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    fn finish_cloud_button(&mut self, file_name: Option<String>) {
+        let Some(Pending { cloud, .. }) = self.file_dialog.take() else { return };
+        let opened = match cloud {
+            Some(CloudTarget::Open) => self.cloud.show_cloud_open(),
+            Some(CloudTarget::Save { doc, choices, plain_save }) => self.cloud.show_cloud_save(doc, file_name, choices, plain_save),
+            None => true,
+        };
+        if !opened {
+            crate::notices::error(self, tl!("Answer the open CraftCloud prompt first, then choose CraftCloud again.").into());
+        }
+    }
+
+    /// Offers the CraftCloud button in the file dialog just asked for: `target` is what it opens.
+    /// Only the dialogs of File › Open and Save As have one.
+    #[cfg(all(feature = "craftcloud", not(target_arch = "wasm32")))]
+    pub(crate) fn offer_cloud_button(&mut self, target: CloudTarget) {
+        if let Some(p) = self.file_dialog.as_mut() {
+            p.cloud = Some(target);
+        }
     }
 
     /// Ends the file dialog in progress: its action continues with `answer`, and its errors go to
@@ -387,7 +472,7 @@ fn read_picked(answer: FileDialogAnswer) -> Result<(String, Vec<u8>), String> {
             Ok((path, bytes))
         }
         FileDialogAnswer::FolderTo(_) => Err(UNEXPECTED.into()),
-        FileDialogAnswer::SaveTo(_) | FileDialogAnswer::Unavailable(_) => Err(UNEXPECTED.into()),
+        FileDialogAnswer::SaveTo(_) | FileDialogAnswer::Cloud { .. } | FileDialogAnswer::Unavailable(_) => Err(UNEXPECTED.into()),
     }
 }
 
